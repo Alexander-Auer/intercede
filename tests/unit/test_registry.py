@@ -14,9 +14,15 @@ from intercede import (
     ConfigurationError,
     JobBackend,
     RegistryError,
+    SubmissionSpec,
     registry,
 )
-from intercede._backends.config import FakeSettings
+from intercede._backends.config import (
+    ARCSettings,
+    CloudSettings,
+    FakeSettings,
+    HTCondorCESettings,
+)
 from intercede._backends.fake import FakeBackend
 from intercede.registry import _build, _load
 
@@ -391,3 +397,85 @@ async def test_fake_through_the_registry_runs_a_job():
         submission = await backend.submit(SubmissionSpec(executable="/bin/true"), 2)
         statuses = await backend.get_status(list(submission.handles.values()))
     assert len(statuses) == 2
+
+
+# --------------------------------------------------------------------------
+# Every family resolves to its own class, and calls reach that class
+# --------------------------------------------------------------------------
+
+SINGLE_CLASS = {
+    "arc": (
+        {"kind": "arc", "endpoint": "https://arc.example.org:443"},
+        ARCSettings,
+    ),
+    "htcondor-ce": (
+        {"kind": "htcondor-ce", "endpoint": "ce.example.org:9619"},
+        HTCondorCESettings,
+    ),
+    "cloud": (
+        {
+            "kind": "cloud",
+            "endpoint": "https://cloud.example.org:5000",
+            "driver": "openstack",
+            "vm_image": "name:alma9",
+            "vm_flavor": "name:m1.large",
+        },
+        CloudSettings,
+    ),
+}
+
+
+@pytest.mark.parametrize("kind", sorted(SINGLE_CLASS))
+class TestSingleClassFamilies:
+    """Monolithic ("arc", "htcondor-ce") and provider ("cloud") backends."""
+
+    @pytest.fixture(autouse=True)
+    def registered(self, monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
+        monkeypatch.setitem(registry._BACKENDS, kind, f"{DUMMIES}:DummyBackend")
+
+    def test_built_from_its_own_settings(self, kind: str):
+        config, settings_type = SINGLE_CLASS[kind]
+        built: Any = registry.backend(config)
+        assert type(built).__name__ == "DummyBackend"
+        assert isinstance(built.settings, settings_type)
+        assert built.settings.kind == kind
+
+    def test_needs_no_transport_or_scheduler(self, kind: str):
+        # Only the backend table is filled; the other two stay empty.
+        assert registry._TRANSPORTS == {}
+        assert registry._SCHEDULERS == {}
+        assert registry.backend(SINGLE_CLASS[kind][0]) is not None
+
+    def test_is_listed_once_registered(self, kind: str):
+        assert kind in registry.available()["backend"]
+
+    async def test_calls_reach_the_registered_class(self, kind: str):
+        built: Any = registry.backend(SINGLE_CLASS[kind][0])
+        backend: JobBackend = built  # what the consumer holds: only the protocol
+        async with backend as ce:
+            result = await ce.submit(SubmissionSpec(executable="x"))
+            await ce.get_status([])
+        assert result == f"submitted by {kind}"
+        assert built.calls == ["submit", "get_status"]
+
+
+async def test_composed_backend_calls_reach_the_registered_class(composed: None):
+    built: Any = registry.backend(LOCAL_SLURM)
+    backend: JobBackend = built
+    async with backend as ce:
+        await ce.get_status([])
+    assert type(built).__name__ == "DummyBatchBackend"
+
+
+async def test_each_kind_reaches_its_own_class(monkeypatch: pytest.MonkeyPatch):
+    """Two kinds registered to two classes: each configuration gets its own."""
+    monkeypatch.setitem(registry._BACKENDS, "cloud", f"{DUMMIES}:DummyBackend")
+    cloud: Any = registry.backend(SINGLE_CLASS["cloud"][0])
+    fake = _build(FakeSettings())
+    assert type(cloud).__name__ == "DummyBackend"
+    assert isinstance(fake, FakeBackend)
+    async with cloud as ce:
+        await ce.submit(SubmissionSpec(executable="x"))
+    async with fake as ce:
+        await ce.submit(SubmissionSpec(executable="x"))
+    assert cloud.calls == ["submit"]  # the fake's submit never touched the dummy
