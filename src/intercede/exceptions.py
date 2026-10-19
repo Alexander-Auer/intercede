@@ -12,6 +12,7 @@ __all__ = [
     "InterCEdeError",
     "ResourceUnavailableError",
     "SpecificationRejectedError",
+    "RegistryError",
 ]
 
 
@@ -33,3 +34,7 @@ class ResourceUnavailableError(InterCEdeError):
 
 class SpecificationRejectedError(InterCEdeError):
     """The backend cannot honour this specification, so no copy was submitted."""
+
+
+class RegistryError(InterCEdeError):
+    """There is an error in the registry usage."""
