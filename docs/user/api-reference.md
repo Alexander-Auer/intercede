@@ -11,6 +11,10 @@ Anything else, including every name starting with `_`, is internal.
 
 ::: intercede.models
 
+## Configuration
+
+::: intercede.config
+
 ## Exceptions
 
 ::: intercede.exceptions

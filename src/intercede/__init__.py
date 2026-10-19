@@ -5,6 +5,7 @@ from __future__ import annotations
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as get_version
 
+from intercede.config import BackendConfig
 from intercede.exceptions import (
     AuthenticationError,
     ConfigurationError,
@@ -71,6 +72,8 @@ __all__ = [
     "StatusMap",
     "Submission",
     "SubmissionSpec",
+    # configuration
+    "BackendConfig",
     # exceptions
     "AuthenticationError",
     "ConfigurationError",
