@@ -245,7 +245,10 @@ class FakeBackend:
 
         if not self.resource_staging:
             self._check_can_fetch(spec.inputs)
-            self._check_can_upload(spec.outputs.members)
+            if spec.outputs is not None:
+                self._check_can_upload(spec.outputs.members)
+            else:
+                raise SpecificationRejectedError(f"tag: {spec.tag} contains no outputs")
 
     def _check_container_support(self, spec: SubmissionSpec) -> None:
         if spec.container is not None and not self.containers:
@@ -290,7 +293,11 @@ class FakeBackend:
         return contents
 
     @staticmethod
-    def _write_output(job_id: JobID, job: _FakeJob, dest: Path,) -> OpOutcome[JobOutput]:
+    def _write_output(
+        job_id: JobID,
+        job: _FakeJob,
+        dest: Path,
+    ) -> OpOutcome[JobOutput]:
         job_dir = (dest / job_id).resolve()
         files_dir = job_dir / "files"
 
@@ -322,7 +329,9 @@ class FakeBackend:
         )
 
     @staticmethod
-    def _build_output_targets(files_dir: Path, files: Mapping[str, bytes]) -> tuple[dict[str, Path], list[str]]:
+    def _build_output_targets(
+        files_dir: Path, files: Mapping[str, bytes]
+    ) -> tuple[dict[str, Path], list[str]]:
         targets = {}
         escaping = []
 
@@ -337,10 +346,13 @@ class FakeBackend:
         return targets, sorted(escaping)
 
     @staticmethod
-    def _write_job_files(files: Mapping[str, bytes], targets: Mapping[str, Path]) -> None:
+    def _write_job_files(
+        files: Mapping[str, bytes], targets: Mapping[str, Path]
+    ) -> None:
         for name, path in targets.items():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(files[name])
+
 
 # The type checker proves conformance: these assignments fail mypy if the fake
 # ever drifts from the contract (IC-ADR-001 §4).
