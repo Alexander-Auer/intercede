@@ -10,9 +10,9 @@ __all__ = [
     "AuthenticationError",
     "ConfigurationError",
     "InterCEdeError",
+    "RegistryError",
     "ResourceUnavailableError",
     "SpecificationRejectedError",
-    "RegistryError",
 ]
 
 
@@ -37,4 +37,8 @@ class SpecificationRejectedError(InterCEdeError):
 
 
 class RegistryError(InterCEdeError):
-    """There is an error in the registry usage."""
+    """The registry cannot provide what a valid configuration asks for.
+
+    Either this version of interCEde does not ship it, or its registry entry is
+    broken: it cannot be imported, or what it builds does not satisfy its protocol.
+    """

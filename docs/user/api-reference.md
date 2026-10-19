@@ -15,6 +15,10 @@ Anything else, including every name starting with `_`, is internal.
 
 ::: intercede.config
 
+## Registry
+
+::: intercede.registry
+
 ## Exceptions
 
 ::: intercede.exceptions

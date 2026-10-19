@@ -7,7 +7,7 @@ field that does not apply to the chosen kind is rejected, not ignored.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Self
 
 from pydantic import Discriminator, PositiveInt, TypeAdapter, model_validator
@@ -75,6 +75,48 @@ class HTCondorCESettings(_BackendSettings):
         return self
 
 
+# -- provider backends --------------------------------------------------------
+
+_SECRET_NAMES = ("secret", "password", "token", "passphrase")
+_SECRET_EXACT = ("key", "api_key", "access_key", "private_key")
+
+
+class CloudSettings(_Model):
+    """A cloud provider that boots one VM per job (IC-ADR-001 §4).
+
+    There is no queue and no filesystem to collect from afterwards, so the
+    queue, output limits and container launcher of the other families do not
+    apply. The provider's API keys come from the credential provider, never
+    from here (IC-ADR-003 §7).
+    """
+
+    kind: Literal["cloud"]
+    endpoint: str  # the cloud's API endpoint, and its identity in job handles
+    driver: str  # the driver library's name for this cloud, e.g. "openstack"
+    # Extra, non-secret arguments for the driver, e.g. {"ex_tenant_name": "dirac"}.
+    driver_options: Mapping[str, str] = {}
+    vm_image: str  # an image ID, or "name:<image name>"
+    vm_flavor: str  # a flavor ID, or "name:<flavor name>"
+    vm_networks: Sequence[str] = ()
+    vm_ssh_key: str | None = None  # the NAME of a key pair known to the cloud
+    vm_max_lifetime_s: PositiveInt = 14 * 24 * 3600  # older VMs are removed
+
+    @model_validator(mode="after")
+    def _no_secret_driver_options(self) -> Self:
+        secret = sorted(
+            name
+            for name in self.driver_options
+            if name.lower() in _SECRET_EXACT
+            or any(word in name.lower() for word in _SECRET_NAMES)
+        )
+        if secret:
+            raise ValueError(
+                f"driver_options must not hold secrets {secret}; "
+                "they come from the credential provider"
+            )
+        return self
+
+
 # -- composed backends --------------------------------------------------------
 
 
@@ -108,8 +150,17 @@ class BatchSettings(_BackendSettings):
 
 
 BackendSettings = Annotated[
-    ARCSettings | HTCondorCESettings | BatchSettings, Discriminator("kind")
+    ARCSettings | HTCondorCESettings | CloudSettings | BatchSettings,
+    Discriminator("kind"),
 ]
+
+
+class FakeSettings(_Model):
+    """The in-memory fake. Internal: no public configuration reaches it."""
+
+    kind: Literal["fake"] = "fake"
+    resource: str = "fake://local"
+
 
 _SETTINGS: TypeAdapter[BackendSettings] = TypeAdapter(BackendSettings)
 
@@ -123,14 +174,25 @@ def resolve(config: BackendConfig) -> BackendSettings:
 
     """
     data: dict[str, Any] = config.model_dump(exclude_none=True)
-    limits = {name: data.pop(name) for name in LIMIT_FIELDS if name in data}
+    if data["kind"] == "cloud":
+        # Nothing to reshape: every field is the cloud's own, and any limit is
+        # left where the consumer wrote it, to be refused by its own name.
+        return _SETTINGS.validate_python(data)
+
+    limits = {}
+    for name in LIMIT_FIELDS:
+        if name in data:
+            limits[name] = data.pop(name)
     if limits:
         data["limits"] = limits
 
     if data["kind"] == "batch":
         # The transport's own fields, and the transport kind, move into one
         # nested object; anything left over is checked against the backend.
-        transport = {name: data.pop(name) for name in SSH_FIELDS if name in data}
+        transport = {}
+        for name in SSH_FIELDS:
+            if name in data:
+                transport[name] = data.pop(name)
         if "transport" in data:
             transport["kind"] = data.pop("transport")
         if "auth" in data:

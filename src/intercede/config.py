@@ -12,7 +12,7 @@ The kinds are a closed set: they list what interCEde ships.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Literal, Self
 
 from pydantic import PositiveInt, ValidationError, model_validator
@@ -39,38 +39,62 @@ class BackendConfig(_Model):
         user = "dirac"
         known_hosts = "batch.example.org ssh-ed25519 AAAA..."
 
+        kind = "cloud"
+        endpoint = "https://cloud.example.org:5000"
+        driver = "openstack"
+        vm_image = "name:alma9-pilot"
+        vm_flavor = "name:m1.large"
+
     Which fields apply:
 
     ============================  ==========================================
     ``kind``                      fields
     ============================  ==========================================
     ``arc``, ``htcondor-ce``      ``endpoint``, ``auth`` (``token``, ``proxy``)
+    ``cloud``                     ``endpoint``, ``driver``, ``vm_image``,
+                                  ``vm_flavor``, ``driver_options``,
+                                  ``vm_networks``, ``vm_ssh_key``,
+                                  ``vm_max_lifetime_s``
     ``batch`` + ``local``         ``scheduler``
     ``batch`` + ``ssh``           ``scheduler``, ``host``, ``user``,
                                   ``known_hosts``, ``port``, ``jump_host``,
                                   ``connect_timeout_s``, ``auth`` (one of
                                   ``key``, ``password``, ``agent``)
-    every kind                    ``queue``, ``container_launcher``,
+    all but ``cloud``             ``queue``, ``container_launcher``,
                                   ``max_output_bytes``, ``max_output_files``,
                                   ``transfer_timeout_s``
     ============================  ==========================================
     """
 
     # What to use. ``kind`` is also what ``JobHandle.backend`` records.
-    kind: Literal["fake", "arc", "htcondor-ce", "batch"]
+    # Three families (IC-ADR-001 §4): grid CEs that schedule by themselves
+    # ("arc", "htcondor-ce"), a cloud provider that boots a VM per job
+    # ("cloud"), and a batch system reached through a transport ("batch").
+    kind: Literal["arc", "htcondor-ce", "cloud", "batch"]
     transport: Literal["local", "ssh"] | None = None
     scheduler: Literal["slurm", "htcondor", "direct"] | None = None
 
     # Where it is.
-    endpoint: str | None = (
-        None  # a CE: "https://arc.example.org:443", "ce.example.org:9619"
-    )
+    # A CE or cloud API: "https://arc.example.org:443", "ce.example.org:9619"
+    endpoint: str | None = None
     host: str | None = None  # an SSH host
     port: PositiveInt | None = None
     user: str | None = None
     known_hosts: str | None = None  # expected host keys; verification is not optional
     jump_host: str | None = None  # "[user@]host[:port]"
     connect_timeout_s: PositiveInt | None = None
+
+    # Which VM a cloud boots. The cloud's API keys come from the credential
+    # provider, so driver_options holds only non-secret driver arguments.
+    driver: str | None = (
+        None  # the driver library's name for the cloud, e.g. "openstack"
+    )
+    driver_options: Mapping[str, str] | None = None
+    vm_image: str | None = None  # an image ID, or "name:<image name>"
+    vm_flavor: str | None = None  # a flavor ID, or "name:<flavor name>"
+    vm_networks: Sequence[str] | None = None
+    vm_ssh_key: str | None = None  # the NAME of a key pair known to the cloud
+    vm_max_lifetime_s: PositiveInt | None = None
 
     # How to authenticate: which credentials the provider must supply, never
     # the credentials themselves. Defaults to a token for a CE, a key for SSH.
