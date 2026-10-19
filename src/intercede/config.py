@@ -57,7 +57,7 @@ class BackendConfig(_Model):
     """
 
     # What to use. ``kind`` is also what ``JobHandle.backend`` records.
-    kind: Literal["arc", "htcondor-ce", "batch"]
+    kind: Literal["fake", "arc", "htcondor-ce", "batch"]
     transport: Literal["local", "ssh"] | None = None
     scheduler: Literal["slurm", "htcondor", "direct"] | None = None
 
