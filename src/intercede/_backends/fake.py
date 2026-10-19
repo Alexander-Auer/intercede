@@ -10,7 +10,7 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
-from typing import Self
+from typing import Callable, Self
 
 from intercede._backends.config import FakeSettings
 from intercede.exceptions import (
@@ -365,3 +365,4 @@ _output: type[OutputRetriever] = FakeBackend
 _kill: type[Killable] = FakeBackend
 _purge: type[Purgeable] = FakeBackend
 _diag: type[Diagnosable] = FakeBackend
+_built_by_registry: Callable[[FakeSettings], JobBackend] = FakeBackend.from_settings
