@@ -8,8 +8,8 @@ purpose, with ``get_secret_value()``.
 
 from __future__ import annotations
 
-from typing import Any, Self, TypeVar
 from collections import Counter
+from typing import Any, Self, TypeVar
 
 from pydantic import (
     AwareDatetime,
@@ -113,14 +113,14 @@ class CredentialSet(RootModel[tuple[AnyCredential, ...]]):
     def _one_per_kind(self) -> Self:
         counts = Counter(type(credential).__name__ for credential in self.root)
         duplicates = []
-    
+
         for kind, count in counts.items():
             if count > 1:
                 duplicates.append(kind)
-    
+
         if duplicates:
             raise ValueError(f"more than one credential of kind {duplicates}")
-    
+
         return self
 
     def get(self, kind: type[C]) -> C | None:
