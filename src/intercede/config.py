@@ -53,8 +53,7 @@ class BackendConfig(_Model):
     ``arc``, ``htcondor-ce``      ``endpoint``, ``auth`` (``token``, ``proxy``)
     ``cloud``                     ``endpoint``, ``driver``, ``vm_image``,
                                   ``vm_flavor``, ``driver_options``,
-                                  ``vm_networks``, ``vm_ssh_key``,
-                                  ``vm_max_lifetime_s``
+                                  ``vm_networks``, ``vm_ssh_key``
     ``batch`` + ``local``         ``scheduler``
     ``batch`` + ``ssh``           ``scheduler``, ``host``, ``user``,
                                   ``known_hosts``, ``port``, ``jump_host``,
@@ -94,7 +93,6 @@ class BackendConfig(_Model):
     vm_flavor: str | None = None  # a flavor ID, or "name:<flavor name>"
     vm_networks: Sequence[str] | None = None
     vm_ssh_key: str | None = None  # the NAME of a key pair known to the cloud
-    vm_max_lifetime_s: PositiveInt | None = None
 
     # How to authenticate: which credentials the provider must supply, never
     # the credentials themselves. Defaults to a token for a CE, a key for SSH.

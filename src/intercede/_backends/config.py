@@ -7,6 +7,7 @@ field that does not apply to the chosen kind is rejected, not ignored.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Self
 
@@ -27,6 +28,8 @@ if TYPE_CHECKING:
 
 LIMIT_FIELDS = ("max_output_bytes", "max_output_files", "transfer_timeout_s")
 SSH_FIELDS = ("host", "port", "user", "known_hosts", "jump_host", "connect_timeout_s")
+
+_HOST_PORT = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::\d{1,5})?")
 
 # What each configured auth mode asks the credential provider for (IC-ADR-003).
 # "agent" is absent on purpose: an SSH agent holds the key, so nothing is asked.
@@ -105,6 +108,16 @@ class HTCondorCESettings(_CESettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _endpoint_is_host_and_port(self) -> Self:
+        # The CE is reached as a schedd: "-pool host:port -name host".
+        if not _HOST_PORT.fullmatch(self.endpoint):
+            raise ValueError(
+                f"endpoint must be 'host' or 'host:port' (e.g. 'ce.example.org:9619'), "
+                f"not {self.endpoint!r}"
+            )
+        return self
+
 
 # -- provider backends --------------------------------------------------------
 
@@ -130,7 +143,6 @@ class CloudSettings(_Model):
     vm_flavor: str  # a flavor ID, or "name:<flavor name>"
     vm_networks: Sequence[str] = ()
     vm_ssh_key: str | None = None  # the NAME of a key pair known to the cloud
-    vm_max_lifetime_s: PositiveInt = 14 * 24 * 3600  # older VMs are removed
 
     @model_validator(mode="after")
     def _no_secret_driver_options(self) -> Self:
