@@ -1,4 +1,4 @@
-"""What each backend needs from the public ``BackendConfig`` (IC-ADR-001 §5).
+"""What each backend needs from the public ``BackendConfig``.
 
 The consumer describes a backend with one flat model. ``resolve`` turns it into
 the settings of the one backend it names, and is where per-kind rules live: a
@@ -34,7 +34,7 @@ _HOST_PORT = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::\d{1,5})?
 # may not start with "-" or hold spaces.
 _SCHEDD_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*(?:@[A-Za-z0-9][A-Za-z0-9.-]*)?")
 
-# What each configured auth mode asks the credential provider for (IC-ADR-003).
+# What each configured auth mode asks the credential provider for.
 # "agent" is absent on purpose: an SSH agent holds the key, so nothing is asked.
 AUTH_KINDS: dict[str, type[Credential]] = {
     "token": BearerToken,
@@ -45,7 +45,7 @@ AUTH_KINDS: dict[str, type[Credential]] = {
 
 
 class Limits(_Model):
-    """Bounds on output collection (IC-ADR-001 §3). Path containment is always on."""
+    """Bounds on output collection. Path containment is always on."""
 
     max_output_bytes: PositiveInt = 10 * 2**30
     max_output_files: PositiveInt = 10_000
@@ -88,7 +88,7 @@ class _CESettings(_BackendSettings):
 
 class ARCSettings(_CESettings):
     kind: Literal["arc"]
-    # All of these together (IC-ADR-003 §2): a token for the channel, a proxy
+    # All of these together: a token for the channel, a proxy
     # for delegation, or both.
 
     @model_validator(mode="after")
@@ -141,12 +141,12 @@ _SECRET_EXACT = ("key", "api_key", "access_key", "private_key")
 
 
 class CloudSettings(_Model):
-    """A cloud provider that boots one VM per job (IC-ADR-001 §4).
+    """A cloud provider that boots one VM per job.
 
     There is no queue and no filesystem to collect from afterwards, so the
     queue, output limits and container launcher of the other families do not
     apply. The provider's API keys come from the credential provider, never
-    from here (IC-ADR-003 §7).
+    from here.
     """
 
     kind: Literal["cloud"]
@@ -191,7 +191,7 @@ class SSHTransportSettings(_Model):
     host: str
     port: PositiveInt = 22
     user: str
-    known_hosts: str  # host key verification is not optional (IC-ADR-003 §6)
+    known_hosts: str  # host key verification is not optional
     auth: Literal["key", "password", "agent"] = "key"
     jump_host: str | None = None
     connect_timeout_s: PositiveInt = 30
