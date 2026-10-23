@@ -85,7 +85,7 @@ def _validate_output_files(iwd: Path, found: list[Path], limits: Limits) -> str 
 
 
 def _prepare_output_directory(target: Path) -> None:
-    """Replace the previous collection with a fresh output directory"""
+    """Replace the previous collection with a fresh output directory."""
     shutil.rmtree(target, ignore_errors=True)
     target.mkdir(parents=True, mode=0o700)
 

@@ -35,7 +35,7 @@ def submit(
 
     command = ["condor_submit", "-terse"]
 
-    if pool is None:
+    if pool is None or name is None:
         command.append("-spool")
     else:
         command.extend(["-pool", pool, "-remote", name])

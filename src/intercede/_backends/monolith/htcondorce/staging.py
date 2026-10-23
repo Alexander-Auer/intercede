@@ -182,6 +182,6 @@ def outputs(spec: SubmissionSpec) -> tuple[list[str] | None, dict[str, str]]:
         kept.append(pattern)
 
         if destination is not None:
-            remaps[member.pattern] = member.destination  # uploaded by the resource
+            remaps[pattern] = destination  # uploaded by the resource
 
     return (None if include_unlisted else kept), remaps

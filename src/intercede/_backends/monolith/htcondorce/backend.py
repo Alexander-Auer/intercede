@@ -225,9 +225,7 @@ class HTCondorCEBackend:
                     async with limit:
                         results[handle] = await self._collect(session, handle, ad, dest)
 
-                await asyncio.gather(
-                    *(fetch(handle, ad) for handle, ad in ready)
-                )
+                await asyncio.gather(*(fetch(handle, ad) for handle, ad in ready))
         return {handle: results[handle] for handle in handles}  # in the caller's order
 
     async def _collect(
