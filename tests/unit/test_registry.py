@@ -149,7 +149,7 @@ class TestAvailable:
 
     def test_grows_with_the_tables(self, composed: None):
         listing = registry.available()
-        assert listing["backend"] == ("batch",)
+        assert listing["backend"] == ("batch", "htcondor-ce")
         assert listing["transport"] == ("local", "ssh")
         assert listing["scheduler"] == ("slurm",)
 
@@ -366,7 +366,11 @@ class TestAvailableDetails:
         assert registry.available()["transport"] == ("ssh",)  # listed, never imported
 
     def test_shipped_tables_today(self):
-        assert registry.available() == {"backend": (), "transport": (), "scheduler": ()}
+        assert registry.available() == {
+            "backend": ("htcondor-ce",),
+            "transport": (),
+            "scheduler": (),
+        }
 
 
 class TestChoices:
