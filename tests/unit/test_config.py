@@ -134,7 +134,6 @@ class TestCloud:
         settings = resolve(config)
         assert isinstance(settings, CloudSettings)
         assert settings.driver_options == {"ex_tenant_name": "dirac"}
-        assert settings.vm_max_lifetime_s == 14 * 24 * 3600
 
     @pytest.mark.parametrize("field", ["driver", "vm_image", "vm_flavor", "endpoint"])
     def test_required_fields(self, field: str):
@@ -290,7 +289,6 @@ APPLIES: dict[str, set[str]] = {
         "vm_flavor",
         "vm_networks",
         "vm_ssh_key",
-        "vm_max_lifetime_s",
     },
     "batch-local": {"transport", "scheduler"} | _SHARED,
     "batch-ssh": {
@@ -324,7 +322,6 @@ VALUES: dict[str, Any] = {
     "vm_flavor": "name:m1.small",
     "vm_networks": ["public", "private"],
     "vm_ssh_key": "pilot-keypair",
-    "vm_max_lifetime_s": 3600,
     "auth": ["token"],
     "queue": "long",
     "container_launcher": ["apptainer", "exec", "{image}"],
@@ -477,7 +474,6 @@ class TestDefaults:
         assert settings.driver_options == {}
         assert tuple(settings.vm_networks) == ()
         assert settings.vm_ssh_key is None
-        assert settings.vm_max_lifetime_s == 14 * 24 * 3600
 
     def test_shared_fields(self):
         settings = resolve(BackendConfig.model_validate(BASES["batch-local"]))
@@ -521,7 +517,6 @@ class TestAuthValues:
 POSITIVE = [
     "port",
     "connect_timeout_s",
-    "vm_max_lifetime_s",
     "max_output_bytes",
     "max_output_files",
     "transfer_timeout_s",
@@ -656,3 +651,50 @@ class TestCredentialRequirements:
 
         assert set(AUTH_KINDS) == {"token", "proxy", "key", "password"}
         assert "agent" not in AUTH_KINDS
+
+
+# --------------------------------------------------------------------------
+# HTCondor-CE endpoint: reached as "-pool host:port -name host"
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["ce.example.org:9619", "ce.example.org", "ce-01.site.cern.ch:9620", "ce1"],
+)
+def test_htcondor_ce_endpoint_accepted(endpoint: str):
+    assert BackendConfig(kind="htcondor-ce", endpoint=endpoint).endpoint == endpoint
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://ce.example.org:9619",
+        "ce.example.org:",
+        "ce.example.org:port",
+        "ce.example.org/path",
+        "ce example",
+        "-pool",
+        "",
+    ],
+    ids=["url", "empty-port", "named-port", "path", "space", "option", "empty"],
+)
+def test_htcondor_ce_endpoint_refused(endpoint: str):
+    assert "endpoint must be 'host' or 'host:port'" in rejected(
+        kind="htcondor-ce", endpoint=endpoint
+    )
+
+
+def test_arc_endpoint_keeps_its_url_form():
+    assert BackendConfig(
+        kind="arc", endpoint="https://arc.example.org:443"
+    ).endpoint.startswith("https://")
+
+
+@pytest.mark.parametrize(
+    "field", ["vm_max_lifetime_s", "max_lifetime_s", "max_retries"]
+)
+def test_job_lifetime_is_not_configuration(field: str):
+    # When a job or VM is retried, kept or removed is the consumer's policy;
+    # interCEde only submits and monitors (IC-ADR-001 §1).
+    assert field in rejected(**{**CLOUD, field: 3600})
