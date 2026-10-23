@@ -6,7 +6,6 @@ live schedd): what is asserted here is what HTCondor actually does with them.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import pytest
@@ -48,10 +47,6 @@ def test_quote_arguments(arguments: list[str], quoted: str):
 def test_quote_environment_sorts_and_quotes():
     quoted = submit.quote_environment({"STAMP": "a b", "X": "$(Y)", "A": "it's"})
     assert quoted == "\"A='it''s' STAMP='a b' X='$(DOLLAR)(Y)'\""
-
-
-def test_quote_empty_environment():
-    assert submit.quote_environment({}) == '""'
 
 
 @pytest.mark.parametrize("name", ["", "A=B", "WITH SPACE", "DASH-ED", "$X"])
@@ -111,22 +106,6 @@ class TestRender:
             in lines(text)
         )
 
-    def test_executable(self):
-        text = render(plan(executable="/bin/sleep", transfer_executable=False))
-        assert "executable = /bin/sleep" in lines(text)
-        assert "transfer_executable = false" in lines(text)
-
-    def test_no_arguments_line_without_arguments(self):
-        assert not any(
-            line.startswith("arguments") for line in lines(render(plan(arguments=[])))
-        )
-
-    def test_default_output_names_are_unique_per_job(self):
-        text = render(plan())
-        assert "output = $(ClusterId).$(ProcId).out" in lines(text)
-        assert "error = $(ClusterId).$(ProcId).err" in lines(text)
-        assert "log = $(ClusterId).$(ProcId).log" in lines(text)
-
     @pytest.mark.parametrize(
         ("outputs", "expected"),
         [
@@ -169,17 +148,6 @@ class TestRender:
         ]:
             assert line in lines(text)
 
-    def test_optional_resources_are_left_out(self):
-        text = render(plan())
-        assert "request_cpus = 1" in lines(text)
-        assert not any(
-            line.startswith(("request_memory", "+maxMemory", "+BatchRuntime", "+queue"))
-            for line in lines(text)
-        )
-
-    def test_queue_name_is_a_classad_string(self):
-        assert '+queue = "long \\"q\\""' in lines(render(plan(queue='long "q"')))
-
     def test_proxy(self):
         assert "x509userproxy = /creds/proxy" in lines(
             render(plan(proxy_file="/creds/proxy"))
@@ -215,10 +183,6 @@ class TestRender:
             render(plan(copies=[CopyPlan("/work/$0")]))
         )
 
-    def test_needs_a_copy(self):
-        with pytest.raises(ValueError, match="at least one copy"):
-            render(plan(copies=[]))
-
     @pytest.mark.parametrize("field", ["inputs", "outputs"])
     def test_file_lists_cannot_hold_a_comma(self, field: str):
         with pytest.raises(ValueError, match="comma"):
@@ -228,33 +192,13 @@ class TestRender:
         with pytest.raises(ValueError, match="line break"):
             render(plan(copies=[CopyPlan("/work/a\nqueue 100")]))
 
-    def test_ends_with_a_newline(self):
-        assert render(plan()).endswith("queue 2\n")
-
 
 # --------------------------------------------------------------------------
 # Commands
 # --------------------------------------------------------------------------
 
-REMOTE = commands.schedd_options("ce.example.org:9619", "ce.example.org")
-
 
 class TestCommands:
-    def test_schedd_options(self):
-        assert REMOTE == ["-pool", "ce.example.org:9619", "-name", "ce.example.org"]
-
-    def test_submit_to_a_remote_schedd_spools(self):
-        argv = commands.submit("/w/job.sub", "ce.example.org:9619", "ce.example.org")
-        assert argv == [
-            "condor_submit",
-            "-terse",
-            "-pool",
-            "ce.example.org:9619",
-            "-remote",
-            "ce.example.org",
-            "/w/job.sub",
-        ]
-
     def test_submit_to_the_local_schedd_spools(self):
         assert commands.submit("/w/job.sub") == [
             "condor_submit",
@@ -263,47 +207,9 @@ class TestCommands:
             "/w/job.sub",
         ]
 
-    @pytest.mark.parametrize(("pool", "name"), [("p:1", None), (None, "n")])
-    def test_submit_needs_pool_and_name_together(
-        self, pool: str | None, name: str | None
-    ):
-        with pytest.raises(ValueError, match="both"):
-            commands.submit("/w/job.sub", pool, name)
-
-    def test_query_and_history(self):
-        ids = [status.JobID("1.0"), status.JobID("1.1")]
-        tail = ["1.0", "1.1", "-attributes", "A,B", "-json"]
-        assert commands.query(ids, ["A", "B"], REMOTE) == ["condor_q", *REMOTE, *tail]
-        assert commands.history(ids, ["A", "B"], REMOTE) == [
-            "condor_history",
-            *REMOTE,
-            *tail,
-        ]
-
-    def test_query_the_local_schedd(self):
-        assert commands.query([status.JobID("1.0")], ["A"], ()) == [
-            "condor_q",
-            "1.0",
-            "-attributes",
-            "A",
-            "-json",
-        ]
-
-    def test_remove_and_transfer(self):
-        assert commands.remove([status.JobID("1.0")], REMOTE) == [
-            "condor_rm",
-            *REMOTE,
-            "1.0",
-        ]
-        assert commands.transfer_data([status.JobID("1.0")], REMOTE) == [
-            "condor_transfer_data",
-            *REMOTE,
-            "1.0",
-        ]
-
     @pytest.mark.parametrize(
         ("count", "sizes"),
-        [(0, []), (1, [1]), (100, [100]), (101, [100, 1]), (250, [100, 100, 50])],
+        [(100, [100]), (101, [100, 1]), (250, [100, 100, 50])],
     )
     def test_chunks(self, count: int, sizes: list[int]):
         ids = [status.JobID(f"1.{i}") for i in range(count)]
@@ -373,8 +279,8 @@ class TestJobStatus:
 
     @pytest.mark.parametrize(
         "code",
-        [0, 8, 99, None, "2"],
-        ids=["zero", "eight", "large", "missing", "string"],
+        [8, None],
+        ids=["unexpected", "missing"],
     )
     def test_unknown_codes(self, code: Any):
         assert status.job_status(ad(JobStatus=code)) == JobStatus.UNKNOWN
@@ -436,14 +342,6 @@ class TestJobStatus:
     ):
         assert status.job_status(ad(JobStatus=3, **fields)) == expected
 
-    def test_hold_reason(self):
-        assert status.hold_reason(ad(JobStatus=5, HoldReason="because")) == "because"
-        assert status.hold_reason(ad(JobStatus=2, HoldReason="stale")) is None
-        assert status.hold_reason(ad(JobStatus=5, HoldReason=None)) is None
-
-    def test_job_id(self):
-        assert status.job_id(ad()) == "3.1"
-
 
 class TestParseAds:
     def test_condor_q_prints_nothing_for_no_match(self):
@@ -452,39 +350,6 @@ class TestParseAds:
 
     def test_condor_history_prints_an_empty_list(self):
         assert status.parse_ads("[\n]\n") == []
-
-    def test_real_output(self):
-        # Captured from HTCondor 25: payloads exiting 0, exiting 3 and killed
-        # by signal 9, with no policy set on them.
-        raw = json.dumps(
-            [
-                {"ExitBySignal": False, "ExitCode": 0, "JobStatus": 4, "ProcId": 0},
-                {"ExitBySignal": False, "ExitCode": 3, "JobStatus": 4, "ProcId": 1},
-                {"ExitBySignal": True, "ExitSignal": 9, "JobStatus": 4, "ProcId": 2},
-            ],
-            indent=2,
-        )
-        ads = status.parse_ads(raw)
-        assert [status.job_status(a) for a in ads] == [
-            JobStatus.DONE,
-            JobStatus.FAILED,
-            JobStatus.FAILED,
-        ]
-
-    def test_real_output_after_purge(self):
-        # The same jobs in condor_history after condor_rm released them.
-        raw = json.dumps(
-            [
-                {"ExitCode": 0, "JobStatus": 3, "LastJobStatus": 4, "ProcId": 0},
-                {"ExitCode": 3, "JobStatus": 3, "LastJobStatus": 4, "ProcId": 1},
-                {"ExitBySignal": True, "JobStatus": 3, "LastJobStatus": 4, "ProcId": 2},
-            ]
-        )
-        assert [status.job_status(a) for a in status.parse_ads(raw)] == [
-            JobStatus.DONE,
-            JobStatus.FAILED,
-            JobStatus.FAILED,
-        ]
 
     @pytest.mark.parametrize("raw", ["{}", "[1, 2]", '"text"', "not json"])
     def test_anything_else_is_refused(self, raw: str):

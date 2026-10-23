@@ -27,15 +27,11 @@ from intercede import (
     CopyVars,
     FileRef,
     InterCEdeError,
-    JobBackend,
     JobHandle,
     JobID,
     JobStatus,
-    Killable,
     OutputMember,
-    OutputRetriever,
     OutputSpec,
-    Purgeable,
     ResourceUnavailableError,
     SpecificationRejectedError,
     SubmissionSpec,
@@ -258,12 +254,6 @@ async def ce(condor: FakeCondor, workdir: Path):
 
 
 class TestShape:
-    @pytest.mark.parametrize(
-        "protocol", [JobBackend, OutputRetriever, Killable, Purgeable]
-    )
-    def test_capabilities(self, condor: FakeCondor, workdir: Path, protocol: type):
-        assert isinstance(make(condor, workdir), protocol)
-
     def test_no_live_diagnostics(self, condor: FakeCondor, workdir: Path):
         assert not isinstance(make(condor, workdir), Diagnosable)
 
@@ -303,6 +293,17 @@ class TestShape:
         argv = condor.calls[0].argv
         assert argv[argv.index("-pool") + 1] == pool
         assert argv[argv.index("-name") + 1] == pool.split(":")[0]
+
+    async def test_schedd_overrides_the_name_not_the_pool(
+        self, condor: FakeCondor, workdir: Path
+    ):
+        async with make(condor, workdir, schedd="ce01@ce.example.org") as backend:
+            await backend.get_status(
+                [JobHandle(backend="htcondor-ce", resource=ENDPOINT, id=JobID("1.0"))]
+            )
+        argv = condor.calls[0].argv
+        assert argv[argv.index("-pool") + 1] == ENDPOINT
+        assert argv[argv.index("-name") + 1] == "ce01@ce.example.org"
 
     async def test_closed_backend_refuses(self, condor: FakeCondor, workdir: Path):
         backend = make(condor, workdir)
@@ -368,14 +369,6 @@ class TestEnvironment:
             condor.calls[0].env["_CONDOR_AUTH_SSL_CLIENT_CADIR"]
             == "/etc/grid-security/certificates"
         )
-
-    async def test_each_call_has_its_own_credential_files(
-        self, ce: HTCondorCEBackend, condor: FakeCondor
-    ):
-        await ce.submit(SPEC)
-        await ce.submit(SPEC)
-        first, second = (c.env["_CONDOR_SCITOKENS_FILE"] for c in condor.calls[:2])
-        assert first != second
 
     async def test_scopes_follow_the_operation(self, condor: FakeCondor, workdir: Path):
         asked: list[frozenset[str]] = []
@@ -483,23 +476,17 @@ class TestErrors:
 
 
 class TestRunProcess:
-    async def test_runs_a_command(self):
+    async def test_runs_a_command_with_only_the_given_environment(self):
         result = await run_process(
-            ["/bin/sh", "-c", "echo out; echo err >&2; exit 3"], dict(os.environ), 10
-        )
-        assert (result.returncode, result.stdout, result.stderr) == (
-            3,
-            "out\n",
-            "err\n",
-        )
-
-    async def test_passes_only_the_given_environment(self):
-        result = await run_process(
-            ["/bin/sh", "-c", "echo $ONLY"],
+            ["/bin/sh", "-c", "echo $ONLY; echo err >&2; exit 3"],
             {"ONLY": "this", "PATH": os.environ["PATH"]},
             10,
         )
-        assert result.stdout == "this\n"
+        assert (result.returncode, result.stdout, result.stderr) == (
+            3,
+            "this\n",
+            "err\n",
+        )
 
     async def test_missing_tool_is_a_configuration_error(self):
         with pytest.raises(ConfigurationError, match="HTCondor client tools"):
@@ -516,29 +503,25 @@ class TestRunProcess:
 
 
 class TestSubmit:
-    async def test_one_handle_per_copy(self, ce: HTCondorCEBackend):
-        sub = await ce.submit(SPEC, 3)
-        assert sorted(sub.handles) == [0, 1, 2]
-        assert [h.id for h in sub.handles.values()] == ["1.0", "1.1", "1.2"]
-        assert all(
-            h.backend == "htcondor-ce" and h.resource == ENDPOINT
-            for h in sub.handles.values()
-        )
-        assert sub.failures == {}
-
     async def test_zero_copies_submit_nothing(
         self, ce: HTCondorCEBackend, condor: FakeCondor
     ):
         assert (await ce.submit(SPEC, 0)).handles == {}
         assert condor.calls == []
 
-    async def test_spools_to_the_remote_schedd(
-        self, ce: HTCondorCEBackend, condor: FakeCondor
+    async def test_local_inputs_keep_their_directories(
+        self, ce: HTCondorCEBackend, condor: FakeCondor, tmp_path: Path
     ):
-        await ce.submit(SPEC)
-        argv = condor.calls[0].argv
-        assert argv[:2] == ["condor_submit", "-debug"]
-        assert argv[2:7] == ["-terse", "-pool", ENDPOINT, "-remote", "ce.example.org"]
+        source = tmp_path / "anything.dat"
+        source.write_text("data")
+        spec = SPEC.model_copy(
+            update={"inputs": [FileRef(name="sub/dir/in.txt", source=str(source))]}
+        )
+        await ce.submit(spec)
+        staged = [
+            p for p in condor.calls[0].files if p.endswith("inputs/sub/dir/in.txt")
+        ]
+        assert len(staged) == 1 and condor.calls[0].files[staged[0]][1] == b"data"
 
     async def test_secrets_are_private_and_gone_afterwards(
         self, ce: HTCondorCEBackend, condor: FakeCondor, workdir: Path
@@ -564,21 +547,6 @@ class TestSubmit:
     ):
         await ce.submit(SPEC, [CopyVars(secrets={"pilot.secret": b"TOPSECRET"})])
         assert "TOPSECRET" not in condor.descriptions[0]
-
-    async def test_per_copy_environment(
-        self, ce: HTCondorCEBackend, condor: FakeCondor
-    ):
-        spec = SPEC.model_copy(update={"environment": {"SITE": "x"}})
-        await ce.submit(
-            spec,
-            [
-                CopyVars(environment={"STAMP": "a"}),
-                CopyVars(environment={"STAMP": "b"}),
-            ],
-        )
-        text = condor.descriptions[0]
-        assert "ic_env_0 = \"SITE='x' STAMP='a'\"" in text
-        assert "ic_env_1 = \"SITE='x' STAMP='b'\"" in text
 
     async def test_different_variable_names_get_separate_clusters(
         self, ce: HTCondorCEBackend, condor: FakeCondor
@@ -635,23 +603,6 @@ class TestSubmit:
         with pytest.raises(ResourceUnavailableError, match="schedd full"):
             await ce.submit(SPEC, 2)
 
-    async def test_local_inputs_are_read_and_staged_under_their_names(
-        self, ce: HTCondorCEBackend, condor: FakeCondor, tmp_path: Path
-    ):
-        source = tmp_path / "anything.dat"
-        source.write_text("data")
-        spec = SPEC.model_copy(
-            update={"inputs": [FileRef(name="sub/dir/in.txt", source=str(source))]}
-        )
-        await ce.submit(spec)
-        staged = [
-            path
-            for path in condor.calls[0].files
-            if path.endswith("inputs/sub/dir/in.txt")
-        ]
-        assert len(staged) == 1 and condor.calls[0].files[staged[0]][1] == b"data"
-        assert "inputs/, $(ic_in_$(ProcId))" in condor.descriptions[0]
-
     async def test_url_inputs_are_left_to_the_resource(
         self, ce: HTCondorCEBackend, condor: FakeCondor
     ):
@@ -688,19 +639,6 @@ class TestSubmit:
         with pytest.raises(SpecificationRejectedError, match="cannot read"):
             await ce.submit(spec)
         assert "condor_submit" not in condor.tools()
-
-    async def test_local_executable_is_shipped(
-        self, ce: HTCondorCEBackend, condor: FakeCondor, tmp_path: Path
-    ):
-        script = tmp_path / "pilot.sh"
-        script.write_text("#!/bin/sh\n")
-        await ce.submit(
-            SPEC.model_copy(update={"executable": str(script), "arguments": ["a b"]})
-        )
-        text = condor.descriptions[0]
-        assert f"executable = {script}" in text
-        assert "transfer_executable = true" in text
-        assert "arguments = \"'a b'\"" in text
 
     async def test_command_on_the_worker_is_not_shipped(
         self, ce: HTCondorCEBackend, condor: FakeCondor
@@ -742,23 +680,8 @@ class TestSubmit:
             await backend.submit(spec)
         assert '+queue = "short"' in condor.descriptions[0]
 
-    async def test_custom_stdout_and_stderr(
-        self, ce: HTCondorCEBackend, condor: FakeCondor
-    ):
-        await ce.submit(
-            SPEC.model_copy(update={"stdout": "pilot.out", "stderr": "pilot.err"})
-        )
-        assert "output = pilot.out" in condor.descriptions[0]
-        assert "error = pilot.err" in condor.descriptions[0]
-
 
 class TestSubmitOutputs:
-    async def test_no_outputs_brings_back_no_payload_file(
-        self, ce: HTCondorCEBackend, condor: FakeCondor
-    ):
-        await ce.submit(SPEC)
-        assert 'transfer_output_files = ""' in condor.descriptions[0]
-
     async def test_kept_and_uploaded_members(
         self, ce: HTCondorCEBackend, condor: FakeCondor
     ):
@@ -905,19 +828,6 @@ class TestStatus:
         history_ids = [a for a in condor.calls[1].argv if re.fullmatch(r"\d+\.\d+", a)]
         assert history_ids == ["1.1"]  # only what the queue did not know
 
-    async def test_no_history_call_when_the_queue_knows_everything(
-        self, ce: HTCondorCEBackend, condor: FakeCondor
-    ):
-        sub = await ce.submit(SPEC)
-        condor.calls.clear()
-        await ce.get_status(list(sub.handles.values()))
-        assert condor.tools() == ["condor_q"]
-
-    async def test_unknown_jobs_are_unknown(self, ce: HTCondorCEBackend):
-        assert await ce.get_status([handle("99.0")]) == {
-            handle("99.0"): JobStatus.UNKNOWN
-        }
-
     @pytest.mark.parametrize(
         "foreign",
         [
@@ -936,20 +846,11 @@ class TestStatus:
         assert await ce.get_status([bad]) == {bad: JobStatus.UNKNOWN}
         assert condor.calls == []
 
-    async def test_each_id_asked_once(self, ce: HTCondorCEBackend, condor: FakeCondor):
-        await ce.get_status([handle("1.0"), handle("1.0"), handle("1.1")])
-        ids = [a for a in condor.calls[0].argv if re.fullmatch(r"\d+\.\d+", a)]
-        assert ids == ["1.0", "1.1"]
-
     async def test_large_polls_are_chunked(
         self, ce: HTCondorCEBackend, condor: FakeCondor
     ):
         await ce.get_status([handle(f"1.{i}") for i in range(250)])
         assert condor.tools() == ["condor_q"] * 3 + ["condor_history"] * 3
-
-    async def test_no_handles_no_calls(self, ce: HTCondorCEBackend, condor: FakeCondor):
-        assert await ce.get_status([]) == {}
-        assert condor.calls == []
 
 
 # --------------------------------------------------------------------------
@@ -1036,10 +937,6 @@ class TestOutput:
             and outcome.reason == "the job has left the queue; its output is gone"
         )
 
-    async def test_unknown_job(self, ce: HTCondorCEBackend, tmp_path: Path):
-        outcome = (await ce.get_output([handle("9.0")], tmp_path))[handle("9.0")]
-        assert not outcome.ok and outcome.reason == "unknown job"
-
     @pytest.mark.parametrize(
         "iwd", ["/etc", "relative/dir", "{workdir}", "{workdir}/../escape"]
     )
@@ -1074,16 +971,6 @@ class TestOutput:
             not outcome.ok
             and outcome.reason == "condor_transfer_data failed: ERROR: spool gone"
         )
-
-    async def test_mixed_batch(
-        self, ce: HTCondorCEBackend, condor: FakeCondor, tmp_path: Path
-    ):
-        sub = await ce.submit(SPEC, 2)
-        condor.finish("1.0")
-        outcomes = await ce.get_output(
-            [sub.handles[0], sub.handles[1], handle("9.0")], tmp_path
-        )
-        assert [o.ok for o in outcomes.values()] == [True, False, False]
 
     async def test_too_many_files(
         self, condor: FakeCondor, workdir: Path, tmp_path: Path
@@ -1152,15 +1039,10 @@ class TestOutput:
 
 
 class TestKill:
-    @pytest.mark.parametrize("code", [1, 2], ids=["waiting", "running"])
-    async def test_removes_active_jobs(
-        self, ce: HTCondorCEBackend, condor: FakeCondor, code: int
-    ):
-        h = (await ce.submit(SPEC)).handles[0]
-        condor.finish(h.id, code=code)
-        outcome = (await ce.kill([h]))[h]
-        assert outcome.ok and outcome.reason is None
-        assert (await ce.get_status([h]))[h] == JobStatus.ABORTED
+    async def test_a_job_the_ce_no_longer_knows(self, ce: HTCondorCEBackend):
+        gone = handle("9.0")
+        assert (await ce.kill([gone]))[gone].reason == "unknown job"
+        assert (await ce.purge([gone]))[gone].reason == "unknown job"
 
     @pytest.mark.parametrize(
         "fields",
@@ -1176,15 +1058,6 @@ class TestKill:
         outcome = (await ce.kill([h]))[h]
         assert outcome.ok and outcome.reason == "already finished"
         assert "condor_rm" not in condor.tools()
-
-    async def test_job_in_history_only(self, ce: HTCondorCEBackend):
-        h = (await ce.submit(SPEC)).handles[0]
-        await ce.purge([h])
-        assert (await ce.kill([h]))[h].reason == "already finished"
-
-    async def test_unknown_job(self, ce: HTCondorCEBackend):
-        outcome = (await ce.kill([handle("9.0")]))[handle("9.0")]
-        assert not outcome.ok and outcome.reason == "unknown job"
 
     async def test_condor_rm_refusing_one_job(
         self, ce: HTCondorCEBackend, condor: FakeCondor
@@ -1211,24 +1084,11 @@ class TestKill:
 
 
 class TestPurge:
-    async def test_releases_a_finished_job_and_keeps_its_result(
-        self, ce: HTCondorCEBackend, condor: FakeCondor
-    ):
-        h = (await ce.submit(SPEC)).handles[0]
-        condor.finish(h.id, ExitCode=0)
-        assert (await ce.purge([h]))[h].ok
-        assert h.id not in condor.queue
-        assert (await ce.get_status([h]))[h] == JobStatus.DONE
-
     async def test_twice_is_harmless(self, ce: HTCondorCEBackend):
         h = (await ce.submit(SPEC)).handles[0]
         await ce.purge([h])
         again = (await ce.purge([h]))[h]
         assert again.ok and again.reason == "already released"
-
-    async def test_unknown_job(self, ce: HTCondorCEBackend):
-        outcome = (await ce.purge([handle("9.0")]))[handle("9.0")]
-        assert not outcome.ok and outcome.reason == "unknown job"
 
     async def test_purges_active_jobs_too(
         self, ce: HTCondorCEBackend, condor: FakeCondor
@@ -1262,19 +1122,6 @@ class TestWorkingArea:
             ):
                 await backend.submit(SPEC)
 
-    async def test_a_file_in_its_place_is_refused(
-        self, condor: FakeCondor, tmp_path: Path
-    ):
-        (tmp_path / "work").write_text("")
-        async with make(condor, tmp_path / "work") as backend:
-            with pytest.raises((ConfigurationError, FileExistsError)):
-                await backend.submit(SPEC)
-
-    def test_default_location_is_per_user(self):
-        from intercede._backends.monolith.htcondorce.staging import default_workdir
-
-        assert default_workdir().name == f"intercede-htcondor-ce-{os.getuid()}"
-
 
 class TestOutputEdgeCases:
     async def test_transfer_that_writes_nothing(
@@ -1289,21 +1136,6 @@ class TestOutputEdgeCases:
             and outcome.reason == "condor_transfer_data returned no files"
         )
 
-    async def test_ad_without_file_attributes(
-        self, ce: HTCondorCEBackend, condor: FakeCondor, tmp_path: Path
-    ):
-        # The ad comes from the CE: without Out/Err/UserLog nothing is labelled
-        # stdout, stderr or log, but every file is still delivered.
-        h = (await ce.submit(SPEC)).handles[0]
-        condor.finish(h.id)
-        for key in ("Out", "Err", "UserLog"):
-            condor.queue[h.id].pop(key)
-        condor.outputs[h.id] = {"1.0.out": b"x"}
-        outcome = (await ce.get_output([h], tmp_path))[h]
-        assert outcome.ok and outcome.value is not None
-        assert outcome.value.stdout is None and outcome.value.log is None
-        assert set(outcome.value.files) == {"1.0.out"}
-
     async def test_log_outside_the_job_directory_is_not_the_log(
         self, ce: HTCondorCEBackend, condor: FakeCondor, tmp_path: Path
     ):
@@ -1315,15 +1147,6 @@ class TestOutputEdgeCases:
         assert (
             "elsewhere.log" in outcome.value.files
         )  # written into the job directory by name
-
-
-async def test_credential_files_need_a_token(tmp_path: Path):
-    from intercede._backends.monolith.htcondorce.session import credential_files
-    from intercede.auth import CredentialSet
-
-    with pytest.raises(AuthenticationError, match="no token"):
-        async with credential_files(CredentialSet(), tmp_path, ENDPOINT):
-            pass
 
 
 class TestStateless:

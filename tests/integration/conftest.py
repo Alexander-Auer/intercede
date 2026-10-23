@@ -1,15 +1,56 @@
-"""Stack fixtures for the integration suite, selected with --stack and --config."""
+"""Stack fixtures for the integration suite, selected with --stack and --config.
+
+The tests marked ``contract`` are the shared suite: written once against the
+interCEde protocols, run on every stack. A test that needs an optional
+capability takes its fixture (``output_retriever``, ``killable``,
+``purgeable``) and is skipped on a backend that does not have it.
+"""
 
 from __future__ import annotations
 
 import os
+import re
 import tomllib
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import pytest
 
+from intercede import registry
+from intercede.auth.models import BearerToken, Credential
+from intercede.auth.providers import StaticCredentials
+from intercede.protocols import JobBackend, Killable, OutputRetriever, Purgeable
 from tests.integration.generate_matrix import STACKS_DIR, compose_env, load_manifest
+
+
+@pytest.hookimpl(tryfirst=True)  # before `-m` deselects anything
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Select the shared suite for every stack, whatever its markers say.
+
+    CI runs ``pytest -m "<markers>"`` with the stack's own expression. A shared
+    test gets the markers that expression asks for, so it is selected too.
+    """
+    stack_id = config.getoption("--stack")
+    entries = {entry["id"]: entry for entry in load_manifest()}
+    if stack_id not in entries:
+        return  # no stack: the `stack` fixture skips, or exits on an unknown id
+    for name in required_markers(entries[stack_id]["markers"]):
+        for item in items:
+            if item.get_closest_marker("contract") is not None:
+                item.add_marker(name)
+
+
+def required_markers(expression: str) -> set[str]:
+    """Return the marker names a ``-m`` expression asks for, i.e. not negated."""
+    words = re.findall(r"[\w-]+", expression)
+    return {
+        word
+        for previous, word in zip(["", *words], words)
+        if word not in ("and", "or", "not") and previous != "not"
+    }
 
 
 @pytest.fixture(scope="session")
@@ -48,3 +89,62 @@ def client_config(
         pytest.skip(msg)
     with path.open("rb") as f:
         return tomllib.load(f)
+
+
+def _token(folder: Path) -> Credential:
+    return BearerToken(value=(folder / "token").read_text().strip())
+
+
+# How each credential type is read from the stack's credentials folder.
+_READERS: dict[str, Callable[[Path], Credential]] = {"token": _token}
+
+
+@pytest.fixture
+def credentials(client_config: dict[str, Any], stack_dir: Path) -> StaticCredentials:
+    """Read the credentials the stack minted at start, as [credentials] names them."""
+    section = client_config["credentials"]
+    if section["type"] not in _READERS:
+        pytest.fail(f"credential type {section['type']!r} is not supported yet")
+    folder = stack_dir / section["path"]
+    try:
+        # Read here and handed over as a value: the backend writes its own private copy.
+        credential = _READERS[section["type"]](folder)
+    except FileNotFoundError as exc:
+        pytest.fail(f"{exc.filename} is missing: is the stack up?")
+    return StaticCredentials([credential])
+
+
+@pytest.fixture
+async def backend(
+    client_config: dict[str, Any], credentials: StaticCredentials
+) -> AsyncIterator[JobBackend]:
+    """Yield the backend [backend] describes, built by the registry and open."""
+    async with registry.backend(client_config["backend"], credentials) as opened:
+        yield opened
+
+
+T = TypeVar("T")
+
+
+def _capable(backend: JobBackend, capability: type[T]) -> T:
+    if not isinstance(backend, capability):
+        pytest.skip(f"the backend is not {capability.__name__}")
+    return backend
+
+
+@pytest.fixture
+def output_retriever(backend: JobBackend) -> OutputRetriever:
+    """Return the backend as an OutputRetriever; skip the test when it is not one."""
+    return _capable(backend, OutputRetriever)
+
+
+@pytest.fixture
+def killable(backend: JobBackend) -> Killable:
+    """Return the backend as Killable; skip the test when it is not."""
+    return _capable(backend, Killable)
+
+
+@pytest.fixture
+def purgeable(backend: JobBackend) -> Purgeable:
+    """Return the backend as Purgeable; skip the test when it is not."""
+    return _capable(backend, Purgeable)

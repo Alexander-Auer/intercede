@@ -51,6 +51,7 @@ class BackendConfig(_Model):
     ``kind``                      fields
     ============================  ==========================================
     ``arc``, ``htcondor-ce``      ``endpoint``, ``auth`` (``token``, ``proxy``)
+    ``htcondor-ce``               ``schedd``
     ``cloud``                     ``endpoint``, ``driver``, ``vm_image``,
                                   ``vm_flavor``, ``driver_options``,
                                   ``vm_networks``, ``vm_ssh_key``
@@ -76,6 +77,9 @@ class BackendConfig(_Model):
     # Where it is.
     # A CE or cloud API: "https://arc.example.org:443", "ce.example.org:9619"
     endpoint: str | None = None
+    # An HTCondor-CE's schedd name, when it is not the endpoint's host name,
+    # e.g. "ce01@ce.example.org" for one of several CEs on one host.
+    schedd: str | None = None
     host: str | None = None  # an SSH host
     port: PositiveInt | None = None
     user: str | None = None

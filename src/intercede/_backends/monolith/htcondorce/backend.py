@@ -75,8 +75,10 @@ class HTCondorCEBackend:
         self._provider = credentials
         self._run = runner
         self._workdir = workdir or staging.default_workdir()
-        self._name, port = split_endpoint(settings.endpoint)
-        self._pool = f"{self._name}:{port}"
+        self._host, port = split_endpoint(settings.endpoint)
+        self._pool = f"{self._host}:{port}"
+        # The CE's schedd is named after its host unless the site says otherwise.
+        self._name = settings.schedd or self._host
         self._credentials: dict[frozenset[str], CredentialSet] = {}  # per scope set
         # Only jobs being collected right now: a lock disappears with its last
         # user, so the backend keeps no record of the jobs it has seen.
@@ -256,7 +258,7 @@ class HTCondorCEBackend:
                     return OpOutcome[JobOutput](
                         ok=False, reason=failure(result, "condor_transfer_data")
                     )
-                target = dest / self._name / handle.id
+                target = dest / self._host / handle.id
                 return collect.move_output(iwd, ad, target, self._settings.limits)
             finally:
                 shutil.rmtree(iwd, ignore_errors=True)

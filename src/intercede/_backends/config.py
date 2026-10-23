@@ -30,6 +30,9 @@ LIMIT_FIELDS = ("max_output_bytes", "max_output_files", "transfer_timeout_s")
 SSH_FIELDS = ("host", "port", "user", "known_hosts", "jump_host", "connect_timeout_s")
 
 _HOST_PORT = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::\d{1,5})?")
+# A schedd name: "host" or "name@host". It ends up on a command line, so it
+# may not start with "-" or hold spaces.
+_SCHEDD_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*(?:@[A-Za-z0-9][A-Za-z0-9.-]*)?")
 
 # What each configured auth mode asks the credential provider for (IC-ADR-003).
 # "agent" is absent on purpose: an SSH agent holds the key, so nothing is asked.
@@ -97,6 +100,9 @@ class ARCSettings(_CESettings):
 
 class HTCondorCESettings(_CESettings):
     kind: Literal["htcondor-ce"]
+    # The schedd's name, when it differs from the endpoint's host: "name@host"
+    # for one of several CEs on one host, or a CE behind a forwarded address.
+    schedd: str | None = None
     # The token authenticates the channel; "proxy" adds an X.509 proxy to the
     # submit description for sites that account on VOMS attributes.
 
@@ -115,6 +121,15 @@ class HTCondorCESettings(_CESettings):
             raise ValueError(
                 f"endpoint must be 'host' or 'host:port' (e.g. 'ce.example.org:9619'), "
                 f"not {self.endpoint!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _schedd_is_a_name(self) -> Self:
+        if self.schedd is not None and not _SCHEDD_NAME.fullmatch(self.schedd):
+            raise ValueError(
+                f"schedd must be 'host' or 'name@host' (e.g. 'ce01@ce.example.org'), "
+                f"not {self.schedd!r}"
             )
         return self
 

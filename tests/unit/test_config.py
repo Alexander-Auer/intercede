@@ -230,6 +230,12 @@ class TestRejected:
             kind="htcondor-ce", endpoint="ce:9619", auth=["proxy"]
         )
 
+    @pytest.mark.parametrize("schedd", ["-name", "ce one@host", "@host", "a@b@c"])
+    def test_htcondor_ce_schedd_is_a_name(self, schedd: str):
+        assert "schedd must be" in rejected(
+            kind="htcondor-ce", endpoint="ce:9619", schedd=schedd
+        )
+
     def test_ce_auth_is_token_or_proxy(self):
         assert "auth" in rejected(kind="arc", endpoint="https://a:443", auth=["key"])
 
@@ -280,7 +286,7 @@ _SHARED = {
 }
 APPLIES: dict[str, set[str]] = {
     "arc": {"endpoint", "auth"} | _SHARED,
-    "htcondor-ce": {"endpoint", "auth"} | _SHARED,
+    "htcondor-ce": {"endpoint", "schedd", "auth"} | _SHARED,
     "cloud": {
         "endpoint",
         "driver",
@@ -310,6 +316,7 @@ VALUES: dict[str, Any] = {
     "transport": "local",
     "scheduler": "htcondor",
     "endpoint": "https://other.example.org:443",
+    "schedd": "ce01@other.example.org",
     "host": "other.example.org",
     "port": 2222,
     "user": "pilot",

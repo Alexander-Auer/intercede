@@ -112,9 +112,16 @@ Defined in `tests/conftest.py` (options) and `tests/integration/conftest.py` (fi
 | `stack` | fixture | The stack's entry from `stacks.yml`. |
 | `stack_dir` | fixture | Folder with the stack's `compose.yml`. |
 | `client_config` | fixture | The stack's `intercede-client.toml`, already parsed. |
+| `credentials` | fixture | A credential provider holding what `[credentials]` points to (types: `token`). |
+| `backend` | fixture | The backend `[backend]` describes, built by the registry and open. |
+| `output_retriever`, `killable`, `purgeable` | fixture | The backend as that capability; skips the test when the backend does not have it. |
 
 If `intercede-client.toml` is missing, the test fails in CI (when `$CI` is set) and is skipped
 locally. In CI, a job where every test is skipped would look green but test nothing.
 
-Markers, defined in `pyproject.toml`: `remote`, `scheduler`, `arc`, `htcondor`, `slurm`, `ssh`,
-`destructive_fetch`.
+Markers, defined in `pyproject.toml`: `contract`, `remote`, `scheduler`, `arc`, `htcondor`,
+`slurm`, `ssh`, `destructive_fetch`.
+
+Tests marked `contract` are the shared suite and run on every stack: with `--stack`, they get the
+markers that the stack's `markers` expression asks for, so `-m "<markers>"` selects them. The
+other markers select tests for behaviour only some backends have.
