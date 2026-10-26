@@ -95,6 +95,21 @@ def client_config(
         return tomllib.load(f)
 
 
+# What a stack can declare its backend refuses, in [refusals] of its client config.
+REFUSALS = frozenset({"containers", "url_inputs", "url_outputs"})
+
+
+@pytest.fixture(scope="session")
+def refusals(client_config: dict[str, Any]) -> frozenset[str]:
+    """Return what this stack's backend cannot honour, as [refusals] declares it."""
+    declared = client_config.get("refusals", {})
+    if unknown := set(declared) - REFUSALS:
+        pytest.fail(
+            f"[refusals] has unknown keys {sorted(unknown)}; known: {sorted(REFUSALS)}"
+        )
+    return frozenset(name for name, refused in declared.items() if refused)
+
+
 def _token(folder: Path) -> Credential:
     return BearerToken(value=(folder / "token").read_text().strip())
 

@@ -16,3 +16,7 @@ schedd = "htcondor-ce@backend"
 [credentials]
 type = "token"                  # an ID token for submituser@users.htcondor.org (IDTOKENS)
 path = "credentials/htcondor/"  # holds `token`, minted at every container start
+
+[refusals]
+# What this backend cannot honour; the shared suite checks it is refused at submit.
+containers = true # no container_launcher configured above

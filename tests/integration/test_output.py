@@ -80,3 +80,76 @@ async def test_output_can_be_collected_again(
             assert outcome.value.stdout.read_text() == "once\n"
     finally:
         await release(backend, handles)
+
+
+async def test_each_copy_gets_its_own_identity_and_secret(
+    backend: JobBackend, output_retriever: OutputRetriever, tmp_path: Path
+):
+    """The failure that matters most, because the jobs still run: every copy alike."""
+    spec = SubmissionSpec(
+        executable=script(
+            tmp_path,
+            'echo "$WHO"; cat pilot.secret; echo; stat -c %a pilot.secret',
+        )
+    )
+    copies = [
+        CopyVars(
+            environment={"WHO": f"copy-{i}"}, secrets={"pilot.secret": b"secret-%d" % i}
+        )
+        for i in range(3)
+    ]
+    submission = await backend.submit(spec, copies)
+    handles = [submission.handles[i] for i in range(len(copies))]
+    try:
+        await wait_for(backend, handles, DONE)
+
+        outputs = await output_retriever.get_output(handles, tmp_path / "out")
+
+        for i, handle in enumerate(handles):
+            output = outputs[handle].value
+            assert output is not None and output.stdout is not None, outputs[
+                handle
+            ].reason
+            assert output.stdout.read_text().splitlines() == [
+                f"copy-{i}",
+                f"secret-{i}",
+                "600",  # readable by the job's user only
+            ]
+    finally:
+        await release(backend, handles)
+
+
+async def test_stdout_and_stderr_stay_apart_from_payload_files(
+    backend: JobBackend, output_retriever: OutputRetriever, tmp_path: Path
+):
+    """A payload may write files named like a backend's own streams (ARC calls them so)."""
+    spec = SubmissionSpec(
+        executable=script(
+            tmp_path,
+            "echo to-stdout; echo to-stderr >&2; "
+            "echo file-stdout > stdout; echo file-stderr > stderr; echo 42 > result.txt",
+        ),
+        outputs=OutputSpec(include_unlisted=True),  # bring back every file
+    )
+    submission = await backend.submit(spec)
+    handles = list(submission.handles.values())
+    try:
+        await wait_for(backend, handles, DONE)
+
+        outcome = (await output_retriever.get_output(handles, tmp_path / "out"))[
+            handles[0]
+        ]
+
+        assert outcome.ok, outcome.reason
+        output = outcome.value
+        assert output is not None
+        assert output.stdout is not None and output.stdout.read_text() == "to-stdout\n"
+        assert output.stderr is not None and output.stderr.read_text() == "to-stderr\n"
+        assert output.files["stdout"].read_text() == "file-stdout\n"
+        assert output.files["stderr"].read_text() == "file-stderr\n"
+        assert output.files["result.txt"].read_text() == "42\n"
+        # The streams and the log are never payload files.
+        streams = {output.stdout, output.stderr, output.log}
+        assert not streams & set(output.files.values())
+    finally:
+        await release(backend, handles)

@@ -19,7 +19,16 @@ from intercede.exceptions import (
     ResourceUnavailableError,
     SpecificationRejectedError,
 )
-from intercede.models import CopyVars, FileRef, JobHandle, JobStatus, SubmissionSpec
+from intercede.models import (
+    ContainerSpec,
+    CopyVars,
+    FileRef,
+    JobHandle,
+    JobStatus,
+    OutputMember,
+    OutputSpec,
+    SubmissionSpec,
+)
 from intercede.protocols import JobBackend, Killable, OutputRetriever, Purgeable
 from tests.integration.jobs import release, script, wait_for
 
@@ -108,6 +117,50 @@ async def test_a_local_input_that_does_not_exist(backend: JobBackend, tmp_path: 
         executable=script(tmp_path, "true"),
         inputs=[FileRef(name="in.dat", source=str(tmp_path / "missing.dat"))],
     )
+    with pytest.raises(SpecificationRejectedError):
+        await backend.submit(spec)
+
+
+async def test_an_output_left_for_collection_on_a_backend_that_cannot_collect(
+    backend: JobBackend, tmp_path: Path
+):
+    if isinstance(backend, OutputRetriever):
+        pytest.skip("the backend collects outputs")
+    spec = SubmissionSpec(
+        executable=script(tmp_path, "true"),
+        outputs=OutputSpec(members=[OutputMember(pattern="result.txt")]),
+    )
+    with pytest.raises(SpecificationRejectedError):
+        await backend.submit(spec)
+
+
+# A request per refusal a stack can declare in [refusals] of its client config.
+REFUSED_SPECS = {
+    "containers": {"container": ContainerSpec(image="docker://almalinux:9")},
+    "url_inputs": {
+        "inputs": [FileRef(name="data.txt", source="https://example.org/data.txt")]
+    },
+    "url_outputs": {
+        "outputs": OutputSpec(
+            members=[
+                OutputMember(
+                    pattern="result.txt",
+                    destination="https://storage.example.org/result.txt",
+                )
+            ]
+        )
+    },
+}
+
+
+@pytest.mark.parametrize("refusal", sorted(REFUSED_SPECS))
+async def test_what_the_stack_cannot_honour_is_refused_at_submit(
+    backend: JobBackend, refusals: frozenset[str], refusal: str, tmp_path: Path
+):
+    """Refused at submit, not accepted and then failed at the resource."""
+    if refusal not in refusals:
+        pytest.skip(f"this stack's backend supports {refusal} (see [refusals])")
+    spec = SubmissionSpec(executable=script(tmp_path, "true"), **REFUSED_SPECS[refusal])
     with pytest.raises(SpecificationRejectedError):
         await backend.submit(spec)
 
