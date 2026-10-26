@@ -76,6 +76,22 @@ def job_status(ad: Mapping[str, Any]) -> JobStatus:
     )
 
 
+def is_removed(ad: Mapping[str, Any]) -> bool:
+    """Tell whether a job was removed, even while it is still in the queue.
+
+    ``condor_rm`` only marks a job for removal: the schedd drops it from the
+    queue a moment later. In between it is already released.
+
+    Args:
+        ad: A job ad with ``JobStatus``.
+
+    Returns:
+        True when the job has been removed.
+
+    """
+    return ad.get("JobStatus") == _REMOVED
+
+
 def _result(ad: Mapping[str, Any]) -> JobStatus:
     """Tell DONE from FAILED for a job whose payload has finished."""
     if ad.get("ExitBySignal") is True:

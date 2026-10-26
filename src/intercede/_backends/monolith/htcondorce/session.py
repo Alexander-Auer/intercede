@@ -123,9 +123,9 @@ class CondorSession:
         if result.returncode == 0:
             return result
         text = f"{result.stdout}\n{result.stderr}"
-        if _AUTH_FAILURE.search(text):
+        if rejected := _AUTH_FAILURE.search(text):
             raise AuthenticationError(
-                f"{self._name} rejected the credentials: {last_line(result)}"
+                f"{self._name} rejected the credentials: {_line_of(text, rejected)}"
             )
         if _UNREACHABLE.search(text):
             raise ResourceUnavailableError(
@@ -201,7 +201,11 @@ class CondorSession:
 # Markers in the -debug output. An authentication failure also reports that
 # the collector "could not be contacted", so it is checked first.
 _AUTH_FAILURE = re.compile(
-    r"AUTHENTICATE:\d+|PERMISSION DENIED|not authorized", re.IGNORECASE
+    # condor_submit prints only the SECMAN line; condor_q also the AUTHENTICATE
+    # summary. Not "method ... failed": that is logged even when the next
+    # method then succeeds.
+    r"required authentication with .* failed|AUTHENTICATE:\d+|PERMISSION DENIED|not authorized",
+    re.IGNORECASE,
 )
 _UNREACHABLE = re.compile(
     r"Connection refused|connect errno|Failed to connect|Couldn't contact|Can't find address|"
@@ -209,6 +213,14 @@ _UNREACHABLE = re.compile(
     re.IGNORECASE,
 )
 _DEBUG_LINE = re.compile(r"^\d\d/\d\d/\d\d \d\d:\d\d:\d\d ")
+
+
+def _line_of(text: str, match: re.Match[str]) -> str:
+    """Return the line holding ``match``, without its -debug timestamp."""
+    start = text.rfind("\n", 0, match.start()) + 1
+    end = text.find("\n", match.end())
+    line = text[start : end if end != -1 else len(text)].strip()
+    return _DEBUG_LINE.sub("", line)
 
 
 def last_line(result: CommandResult) -> str:

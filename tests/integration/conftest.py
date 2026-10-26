@@ -14,6 +14,7 @@ import tomllib
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any, TypeVar
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -22,6 +23,9 @@ from intercede.auth.models import BearerToken, Credential
 from intercede.auth.providers import StaticCredentials
 from intercede.protocols import JobBackend, Killable, OutputRetriever, Purgeable
 from tests.integration.generate_matrix import STACKS_DIR, compose_env, load_manifest
+
+# Nothing listens on port 1, so connecting is refused at once.
+CLOSED_PORT = "127.0.0.1:1"
 
 
 @pytest.hookimpl(tryfirst=True)  # before `-m` deselects anything
@@ -95,23 +99,68 @@ def _token(folder: Path) -> Credential:
     return BearerToken(value=(folder / "token").read_text().strip())
 
 
-# How each credential type is read from the stack's credentials folder.
+def _tampered_token(credential: Credential) -> Credential:
+    # Same shape, wrong signature: what a revoked token, or one issued for
+    # another resource, looks like to the resource.
+    assert isinstance(credential, BearerToken)
+    value = credential.value.get_secret_value()
+    tail = "A" * 8 if value[-8:] != "A" * 8 else "B" * 8
+    return BearerToken(value=value[:-8] + tail)
+
+
+# How each credential type is read from the stack's credentials folder, and
+# turned into one the resource rejects.
 _READERS: dict[str, Callable[[Path], Credential]] = {"token": _token}
+_TAMPERERS: dict[str, Callable[[Credential], Credential]] = {"token": _tampered_token}
 
 
 @pytest.fixture
-def credentials(client_config: dict[str, Any], stack_dir: Path) -> StaticCredentials:
-    """Read the credentials the stack minted at start, as [credentials] names them."""
+def credential(client_config: dict[str, Any], stack_dir: Path) -> Credential:
+    """Read the credential the stack minted at start, as [credentials] names it."""
+    if "credentials" not in client_config:
+        pytest.skip("this stack's backend needs no credentials")
     section = client_config["credentials"]
     if section["type"] not in _READERS:
         pytest.fail(f"credential type {section['type']!r} is not supported yet")
-    folder = stack_dir / section["path"]
     try:
         # Read here and handed over as a value: the backend writes its own private copy.
-        credential = _READERS[section["type"]](folder)
+        return _READERS[section["type"]](stack_dir / section["path"])
     except FileNotFoundError as exc:
         pytest.fail(f"{exc.filename} is missing: is the stack up?")
+
+
+@pytest.fixture
+def credentials(credential: Credential) -> StaticCredentials:
+    """Return a provider holding the stack's credential."""
     return StaticCredentials([credential])
+
+
+@pytest.fixture
+def rejected_credentials(
+    client_config: dict[str, Any], credential: Credential
+) -> StaticCredentials:
+    """Return a provider holding a credential of the right kind that the resource rejects."""
+    return StaticCredentials(
+        [_TAMPERERS[client_config["credentials"]["type"]](credential)]
+    )
+
+
+@pytest.fixture
+def unreachable_config(client_config: dict[str, Any]) -> dict[str, Any]:
+    """Return the stack's [backend], pointed at a closed port, as when the resource is down."""
+    config = dict(client_config["backend"])
+    if "endpoint" in config:
+        endpoint = urlsplit(config["endpoint"])
+        if endpoint.scheme:  # a URL, e.g. "https://ce:443/arex"
+            config["endpoint"] = endpoint._replace(netloc=CLOSED_PORT).geturl()
+        else:  # "host:port"
+            config["endpoint"] = CLOSED_PORT
+    elif "host" in config:  # reached over SSH
+        config["host"], port = CLOSED_PORT.split(":")
+        config["port"] = int(port)
+    else:
+        pytest.skip("this stack's backend reaches no resource over the network")
+    return config
 
 
 @pytest.fixture

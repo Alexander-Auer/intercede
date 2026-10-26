@@ -26,7 +26,7 @@ from intercede._backends.monolith.htcondorce.session import (
 )
 from intercede.auth.models import CredentialSet
 from intercede.auth.protocols import CredentialProvider
-from intercede.exceptions import InterCEdeError
+from intercede.exceptions import InterCEdeError, SpecificationRejectedError
 from intercede.models import (
     CopyVars,
     JobHandle,
@@ -124,6 +124,12 @@ class HTCondorCEBackend:
         copy_vars = [CopyVars()] * copies if isinstance(copies, int) else list(copies)
         if not copy_vars:
             return Submission(handles={})
+        for index, copy in enumerate(copy_vars):
+            # A secret and an input would be staged to the same file.
+            if clashes := spec.clashes_with(copy):
+                raise SpecificationRejectedError(
+                    f"copy {index}: secrets {sorted(clashes)} are named like inputs"
+                )
         outputs, remaps = staging.outputs(spec)
         executable, ship, arguments = staging.command(
             spec, self._settings.container_launcher, self.resource
@@ -204,7 +210,12 @@ class HTCondorCEBackend:
         ready: list[tuple[JobHandle, Mapping[str, Any]]] = []
         for handle in handles:
             ad = queued.get(handle.id) if self._owns(handle) else None
-            if ad is None:
+            if ad is not None and status.is_removed(ad):
+                # Purged a moment ago: released, though not out of the queue yet.
+                results[handle] = OpOutcome[JobOutput](
+                    ok=False, reason="the job was purged; its output is gone"
+                )
+            elif ad is None:
                 known = self._owns(handle) and handle.id in gone
                 reason = (
                     "the job has left the queue; its output is gone"
@@ -291,11 +302,13 @@ class HTCondorCEBackend:
         gone = await self._ads(
             [i for i in ids if i not in queued], status.STATE_ATTRIBUTES, history=True
         )
-        removed, reason = await self._remove(list(queued))
+        # A job removed a moment ago is still queued, but already released.
+        targeted = [i for i, ad in queued.items() if not status.is_removed(ad)]
+        removed, reason = await self._remove(targeted)
         ads = {**gone, **queued}
         return {
             handle: self._outcome(
-                handle, ads, list(queued), removed, reason, "already released"
+                handle, ads, targeted, removed, reason, "already released"
             )
             for handle in handles
         }

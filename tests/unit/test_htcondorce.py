@@ -399,8 +399,14 @@ class TestErrors:
             "10/21/26 13:52:19 AUTHENTICATE:1003:Failed to authenticate with any method\n"
             "Error: Couldn't contact the condor_collector",
             "PERMISSION DENIED to submituser",
+            # condor_submit with a rejected token (HTCondor 25): no AUTHENTICATE
+            # summary, and an error that looks like an unreachable schedd.
+            "10/26/26 11:37:15 AUTHENTICATE: method 2048 (IDTOKENS) failed.\n"
+            "10/26/26 11:37:15 SECMAN: required authentication with collector "
+            "127.0.0.1:9619 failed, so aborting command QUERY_SCHEDD_ADS.\n"
+            "ERROR: Can't find address of schedd htcondor-ce@backend",
         ],
-        ids=["token-rejected", "permission-denied"],
+        ids=["token-rejected", "permission-denied", "submit-token-rejected"],
     )
     async def test_authentication_failure(
         self, ce: HTCondorCEBackend, condor: FakeCondor, stderr: str
@@ -503,6 +509,18 @@ class TestRunProcess:
 
 
 class TestSubmit:
+    async def test_a_secret_named_like_an_input_is_refused_before_any_call(
+        self, ce: HTCondorCEBackend, condor: FakeCondor, tmp_path: Path
+    ):
+        source = tmp_path / "pilot.cfg"
+        source.write_text("data")
+        spec = SPEC.model_copy(
+            update={"inputs": [FileRef(name="pilot.cfg", source=str(source))]}
+        )
+        with pytest.raises(SpecificationRejectedError, match="pilot.cfg"):
+            await ce.submit(spec, [CopyVars(secrets={"pilot.cfg": b"s"})])
+        assert condor.calls == []
+
     async def test_zero_copies_submit_nothing(
         self, ce: HTCondorCEBackend, condor: FakeCondor
     ):
@@ -1084,6 +1102,22 @@ class TestKill:
 
 
 class TestPurge:
+    async def test_a_job_removed_but_still_queued_is_already_released(
+        self, ce: HTCondorCEBackend, condor: FakeCondor, tmp_path: Path
+    ):
+        # condor_rm returns before the schedd drops the job from the queue.
+        h = (await ce.submit(SPEC)).handles[0]
+        condor.finish(h.id, code=3, LastJobStatus=4)
+        condor.calls.clear()
+        output = (await ce.get_output([h], tmp_path))[h]
+        assert (
+            not output.ok and output.reason == "the job was purged; its output is gone"
+        )
+        again = (await ce.purge([h]))[h]
+        assert again.ok and again.reason == "already released"
+        assert "condor_transfer_data" not in condor.tools()
+        assert "condor_rm" not in condor.tools()
+
     async def test_twice_is_harmless(self, ce: HTCondorCEBackend):
         h = (await ce.submit(SPEC)).handles[0]
         await ce.purge([h])
