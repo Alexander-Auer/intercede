@@ -6,12 +6,13 @@ unit conformance suite runs against. Nothing leaves the process.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
 from typing import Self
 
+from intercede._backends.config import FakeConfig
 from intercede.exceptions import (
     InterCEdeError,
     ResourceUnavailableError,
@@ -91,6 +92,18 @@ class FakeBackend:
         self._jobs: dict[JobID, _FakeJob] = {}
         self._next_id = 0
         self._closed = False
+
+    @classmethod
+    def from_settings(cls, settings: FakeConfig) -> Self:
+        """Build the fake from its settings; how the registry constructs it.
+
+        Args:
+            settings: The fake's settings: only the resource it reports.
+
+        Returns:
+            A new fake, not yet opened.
+        """
+        return cls(resource=settings.resource)
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -252,10 +265,8 @@ class FakeBackend:
 
         if not self.resource_staging:
             self._check_can_fetch(spec.inputs)
-            if spec.outputs is not None:
+            if spec.outputs is not None:  # no outputs means nothing to upload
                 self._check_can_upload(spec.outputs.members)
-            else:
-                raise SpecificationRejectedError(f"tag: {spec.tag} contains no outputs")
 
     def _check_container_support(self, spec: SubmissionSpec) -> None:
         if spec.container is not None and not self.containers:
@@ -368,3 +379,4 @@ _output: type[OutputRetriever] = FakeBackend
 _kill: type[Killable] = FakeBackend
 _purge: type[Purgeable] = FakeBackend
 _diag: type[Diagnosable] = FakeBackend
+_built_by_registry: Callable[[FakeConfig], JobBackend] = FakeBackend.from_settings
