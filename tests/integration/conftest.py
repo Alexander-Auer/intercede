@@ -183,7 +183,7 @@ async def backend(
     client_config: dict[str, Any], credentials: StaticCredentials
 ) -> AsyncIterator[JobBackend]:
     """Yield the backend [backend] describes, built by the registry and open."""
-    async with registry.backend(client_config["backend"], credentials) as opened:
+    async with registry.get_backend(client_config["backend"], credentials) as opened:
         yield opened
 
 

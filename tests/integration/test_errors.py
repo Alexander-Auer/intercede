@@ -56,7 +56,7 @@ async def test_a_credential_the_resource_rejects(
 ):
     handle = await submitted(backend, tmp_path)
     try:
-        async with registry.backend(
+        async with registry.get_backend(
             client_config["backend"], rejected_credentials
         ) as rejected:
             with pytest.raises(AuthenticationError):
@@ -73,7 +73,9 @@ async def test_a_provider_without_the_credential(
     client_config: dict[str, Any], credentials: StaticCredentials, tmp_path: Path
 ):
     # `credentials` only makes the test skip on stacks that need none.
-    async with registry.backend(client_config["backend"], StaticCredentials()) as empty:
+    async with registry.get_backend(
+        client_config["backend"], StaticCredentials()
+    ) as empty:
         with pytest.raises(AuthenticationError):
             await empty.submit(SubmissionSpec(executable=script(tmp_path, "true")))
 
@@ -86,7 +88,7 @@ async def test_a_resource_that_is_down(
 ):
     handle = await submitted(backend, tmp_path)
     try:
-        async with registry.backend(unreachable_config, credentials) as down:
+        async with registry.get_backend(unreachable_config, credentials) as down:
             with pytest.raises(ResourceUnavailableError):
                 await down.submit(SubmissionSpec(executable=script(tmp_path, "true")))
             # A stored handle of a job on that resource, while it is down.

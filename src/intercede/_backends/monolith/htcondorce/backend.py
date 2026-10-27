@@ -15,8 +15,7 @@ from typing import Any, Self
 
 from intercede._backends._htcondor import status
 from intercede._backends._htcondor.submit import SubmitPlan, render
-from intercede._backends.config import HTCondorCESettings
-from intercede._backends.credentials import refresh_if_stale
+from intercede._backends.credentials import credential_requirements, refresh_if_stale
 from intercede._backends.monolith.htcondorce import collect, staging
 from intercede._backends.monolith.htcondorce.process import Runner, run_process
 from intercede._backends.monolith.htcondorce.session import (
@@ -26,6 +25,7 @@ from intercede._backends.monolith.htcondorce.session import (
 )
 from intercede.auth.models import CredentialSet
 from intercede.auth.protocols import CredentialProvider
+from intercede.config import HTCondorCEConfig
 from intercede.exceptions import InterCEdeError, SpecificationRejectedError
 from intercede.models import (
     CopyVars,
@@ -64,7 +64,7 @@ class HTCondorCEBackend:
 
     def __init__(
         self,
-        settings: HTCondorCESettings,
+        settings: HTCondorCEConfig,
         credentials: CredentialProvider,
         *,
         runner: Runner = run_process,
@@ -89,9 +89,18 @@ class HTCondorCEBackend:
 
     @classmethod
     def from_settings(
-        cls, settings: HTCondorCESettings, credentials: CredentialProvider
+        cls, settings: HTCondorCEConfig, credentials: CredentialProvider
     ) -> Self:
-        """Build the backend from its settings; how the registry constructs it."""
+        """Build the backend from its settings; how the registry constructs it.
+
+        Args:
+            settings: The CE's validated configuration.
+            credentials: The consumer's provider, asked for a token (and a
+                proxy, if configured) when an operation first needs one.
+
+        Returns:
+            A new backend, not yet opened.
+        """
         return cls(settings, credentials)
 
     @property
@@ -263,14 +272,14 @@ class HTCondorCEBackend:
         async with lock:
             try:
                 result = await session.transfer(
-                    handle.id, self._settings.limits.transfer_timeout_s
+                    handle.id, self._settings.transfer_timeout_s
                 )
                 if result.returncode != 0:
                     return OpOutcome[JobOutput](
                         ok=False, reason=failure(result, "condor_transfer_data")
                     )
                 target = dest / self._host / handle.id
-                return collect.move_output(iwd, ad, target, self._settings.limits)
+                return collect.move_output(iwd, ad, target, self._settings)
             finally:
                 shutil.rmtree(iwd, ignore_errors=True)
 
@@ -343,7 +352,8 @@ class HTCondorCEBackend:
             yield CondorSession(self._run, files, self._pool, self._name)
 
     async def _fresh(self, scopes: frozenset[str]) -> CredentialSet:
-        requirements = self._settings.credential_requirements(scopes)
+        requirements = credential_requirements(self._settings, scopes)
+        assert requirements is not None  # an HTCondor-CE always asks for a token
         fresh = await refresh_if_stale(
             self._credentials.get(scopes), requirements, self._provider
         )
@@ -399,6 +409,6 @@ _backend: type[JobBackend] = HTCondorCEBackend
 _output: type[OutputRetriever] = HTCondorCEBackend
 _kill: type[Killable] = HTCondorCEBackend
 _purge: type[Purgeable] = HTCondorCEBackend
-_built_by_registry: Callable[[HTCondorCESettings, CredentialProvider], JobBackend] = (
+_built_by_registry: Callable[[HTCondorCEConfig, CredentialProvider], JobBackend] = (
     HTCondorCEBackend.from_settings
 )

@@ -149,6 +149,7 @@ docs = { features = ["docs"], solve-group = "default" }
 # The HTCondor tools (condor_submit, condor_q, ...) the htcondor-ce backend runs;
 # the integration suite drives the backend against a real CE with them.
 htcondor-utils = "*"
+
 [tool.pixi.feature.testing.pypi-dependencies]
 intercede = { path = ".", editable = true }
 

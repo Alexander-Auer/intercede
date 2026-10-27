@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from intercede._backends.config import Limits
+from intercede.config import HTCondorCEConfig
 from intercede.models import JobOutput, OpOutcome
 
 
@@ -28,7 +28,7 @@ def inside_workdir(iwd: Path, workdir: Path) -> bool:
 
 
 def move_output(
-    iwd: Path, ad: Mapping[str, Any], target: Path, limits: Limits
+    iwd: Path, ad: Mapping[str, Any], target: Path, limits: HTCondorCEConfig
 ) -> OpOutcome[JobOutput]:
     """Move a job's collected files to ``target`` and describe them in a manifest."""
     if not iwd.is_dir():
@@ -66,7 +66,9 @@ def _find_output_files(iwd: Path) -> list[Path]:
     return [path for path in iwd.rglob("*") if not path.is_dir()]
 
 
-def _validate_output_files(iwd: Path, found: list[Path], limits: Limits) -> str | None:
+def _validate_output_files(
+    iwd: Path, found: list[Path], limits: HTCondorCEConfig
+) -> str | None:
     """Return an error message if the collected files are unsafe or too large."""
     root = iwd.resolve()
 

@@ -21,11 +21,11 @@ import pytest
 
 from intercede import (
     AuthenticationError,
-    BackendConfig,
     ConfigurationError,
     ContainerSpec,
     CopyVars,
     FileRef,
+    HTCondorCEConfig,
     InterCEdeError,
     JobHandle,
     JobID,
@@ -38,7 +38,6 @@ from intercede import (
     registry,
 )
 from intercede._backends.batch.protocols import CommandResult
-from intercede._backends.config import HTCondorCESettings, resolve
 from intercede._backends.monolith.htcondorce import HTCondorCEBackend
 from intercede._backends.monolith.htcondorce.process import run_process
 from intercede.auth import BearerToken, StaticCredentials, X509Proxy
@@ -208,14 +207,8 @@ def ok(stdout: str) -> CommandResult:
     return CommandResult(returncode=0, stdout=stdout, stderr="")
 
 
-def settings(**fields: Any) -> HTCondorCESettings:
-    resolved = resolve(
-        BackendConfig.model_validate(
-            {"kind": "htcondor-ce", "endpoint": ENDPOINT, **fields}
-        )
-    )
-    assert isinstance(resolved, HTCondorCESettings)
-    return resolved
+def settings(**fields: Any) -> HTCondorCEConfig:
+    return HTCondorCEConfig(**{"kind": "htcondor-ce", "endpoint": ENDPOINT, **fields})
 
 
 @pytest.fixture
@@ -263,7 +256,7 @@ class TestShape:
         assert condor.calls == []
 
     def test_built_by_the_registry(self):
-        built = registry.backend(
+        built = registry.get_backend(
             {"kind": "htcondor-ce", "endpoint": ENDPOINT}, StaticCredentials()
         )
         assert isinstance(built, HTCondorCEBackend)
