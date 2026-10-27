@@ -10,6 +10,7 @@ from intercede import (
     FileRef,
     JobHandle,
     JobOutput,
+    JobStatus,
     OpOutcome,
     OutputMember,
     Submission,
@@ -36,6 +37,13 @@ class TestJobHandle:
 
     def test_the_same_id_on_two_resources_is_two_jobs(self):
         assert len({handle(resource="a"), handle(resource="b")}) == 2
+
+    def test_key_separators_inside_parts_are_escaped(self):
+        # Without escaping, ("a:b", "c") and ("a", "b:c") would share a key.
+        first = handle("c", resource="a:b")
+        second = handle("b:c", resource="a")
+        assert first.key != second.key
+        assert str(first) == first.key == "fake:a%3Ab:c"
 
 
 @pytest.mark.parametrize("name", ["", ".", "/etc/passwd", "../up", "a/../../up"])
@@ -91,3 +99,16 @@ def test_secrets_that_clash_with_inputs_are_named():
     spec = SubmissionSpec(executable="x", inputs=[FileRef(name="in", source="a")])
     assert spec.clashes_with(CopyVars(secrets={"in": b"s", "other": b"s"})) == {"in"}
     assert spec.clashes_with(CopyVars()) == frozenset()
+
+
+def test_job_status_values_are_stable():
+    """Stored statuses are compared by value: renaming one is a breaking change."""
+    assert {status.value for status in JobStatus} == {
+        "Submitted",
+        "Waiting",
+        "Running",
+        "Done",
+        "Failed",
+        "Aborted",
+        "Unknown",
+    }
