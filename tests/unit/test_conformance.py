@@ -101,7 +101,7 @@ async def test_kill_reports_per_job(backend: JobBackend):
 
 
 async def test_purge_releases_the_job(backend: JobBackend, tmp_path: Path):
-    """Purge releases a job's output and remote state (IC-ADR-001 §3).
+    """Purge releases a job's output and remote state.
 
     Afterwards the job is no longer active and its output cannot be collected.
     Whether its status is then UNKNOWN or a final state depends on whether the
