@@ -1,4 +1,4 @@
-"""An HTCondor-CE, reached as a remote schedd (issue #23, IC-ADR-001 §4).
+"""An HTCondor-CE, reached as a remote schedd (issue #23).
 
 The backend drives the HTCondor command-line tools, as DIRAC's
 ``HTCondorCEComputingElement`` does with ``UseLocalSchedd = False``: jobs are

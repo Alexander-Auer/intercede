@@ -61,7 +61,7 @@ async def test_inputs_environment_and_outputs_round_trip(
 async def test_output_can_be_collected_again(
     backend: JobBackend, output_retriever: OutputRetriever, tmp_path: Path
 ):
-    """Retrieval is repeatable until purge (IC-ADR-001): a lost download is not lost output."""
+    """Retrieval is repeatable until purge: a lost download is not lost output."""
     submission = await backend.submit(
         SubmissionSpec(executable=script(tmp_path, "echo once"))
     )

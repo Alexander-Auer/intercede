@@ -157,7 +157,7 @@ class TestRender:
         )
 
     def test_finished_jobs_stay_until_purged(self):
-        # The one lifetime rule IC-ADR-001 §3 asks for: output can be collected
+        # The one lifetime rule interCEde sets: output can be collected
         # again until the consumer releases the job.
         assert "leave_in_queue = (JobStatus == 4)" in lines(render(plan()))
 
@@ -175,7 +175,7 @@ class TestRender:
     )
     def test_sets_no_policy_on_the_job(self, command: str):
         # Holding, releasing, removing or retrying jobs is the consumer's
-        # policy, never interCEde's (IC-ADR-001 §1).
+        # policy, never interCEde's.
         assert not any(line.startswith(command) for line in lines(render(plan())))
 
     def test_macros_in_paths_are_escaped(self):

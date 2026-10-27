@@ -7,9 +7,8 @@ stay one bulk submission.
 
 A description only says what to run and where its files go. It sets no
 policy on the job's lifetime: no holds, no automatic removal, no retries.
-Those are the consumer's decisions (IC-ADR-001 §1). The one exception the ADR
-asks for is that a finished job stays in the queue until it is purged, so its
-output can be collected again (IC-ADR-001 §3).
+Those are the consumer's decisions. The one exception is that a finished job
+stays in the queue until it is purged, so its output can be collected again.
 """
 
 from __future__ import annotations

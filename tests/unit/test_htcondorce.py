@@ -1177,7 +1177,7 @@ class TestOutputEdgeCases:
 
 
 class TestStateless:
-    """The backend keeps nothing about jobs between calls (IC-ADR-001 §1)."""
+    """The backend keeps nothing about jobs between calls."""
 
     async def test_no_job_is_remembered_after_collection(
         self, ce: HTCondorCEBackend, condor: FakeCondor, tmp_path: Path

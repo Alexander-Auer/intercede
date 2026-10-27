@@ -45,7 +45,7 @@ DEFAULT_PORT = 9619
 PARALLEL_TRANSFERS = 4
 
 # Token scopes per operation (WLCG token profile), so a status poller carries
-# a read scope and nothing that would let it submit (IC-ADR-003, Motivation 4).
+# a read scope and nothing that would let it submit.
 SUBMIT_SCOPES = frozenset({"compute.create"})
 READ_SCOPES = frozenset({"compute.read"})
 CANCEL_SCOPES = frozenset({"compute.cancel"})
@@ -70,7 +70,7 @@ class HTCondorCEBackend:
         runner: Runner = run_process,
         workdir: Path | None = None,
     ) -> None:
-        # Construction is cheap and does no I/O (IC-ADR-001 §3).
+        # Construction is cheap and does no I/O.
         self._settings = settings
         self._provider = credentials
         self._run = runner
@@ -404,7 +404,7 @@ def split_endpoint(endpoint: str) -> tuple[str, int]:
     return host, int(port) if separator else DEFAULT_PORT
 
 
-# The type checker proves conformance (IC-ADR-001 §4).
+# The type checker proves conformance.
 _backend: type[JobBackend] = HTCondorCEBackend
 _output: type[OutputRetriever] = HTCondorCEBackend
 _kill: type[Killable] = HTCondorCEBackend

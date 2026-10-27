@@ -11,7 +11,7 @@ ARG HTCONDOR_VERSION=v25.14.1
 # renovate: datasource=github-tags depName=htcondor/htcondor-ce
 ARG HTCONDOR_CE_VERSION=v25.7.0
 
-# Long-term-support anchor (IC-ADR-002 §8), updated by hand: no `# renovate:` comment.
+# Long-term-support anchor, updated by hand: no `# renovate:` comment.
 ARG HTCONDOR_LTS_VERSION=25.0.14
 ARG HTCONDOR_CE_LTS_VERSION=25.0.1
 

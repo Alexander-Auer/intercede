@@ -130,7 +130,7 @@ def command(
     """Return what HTCondor runs: the executable, whether to ship it, and its arguments.
 
     A file on this host is shipped; anything else is a command on the worker.
-    A container image is run through the configured launcher (IC-ADR-001 §2.4).
+    A container image is run through the configured launcher.
     """
     executable = spec.executable
     arguments = list(spec.arguments)
