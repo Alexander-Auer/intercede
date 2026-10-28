@@ -10,6 +10,7 @@ on:
       - ".github/workflows/integration.yml"
       - "tests/conftest.py"
       - "pyproject.toml"
+      - "src/**"
 
 permissions:
   contents: read
