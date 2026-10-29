@@ -71,7 +71,8 @@ jobs:
             runner=(pixi run -e py313 pytest -n "${{ matrix.workers }}")
           fi
           set +e
-          "${runner[@]}" tests/integration -m "${{ matrix.markers }}" \
+          # -rs --no-fold-skipped: name every skipped test and why.
+          "${runner[@]}" tests/integration -m "${{ matrix.markers }}" -rs --no-fold-skipped \
             --stack="${{ matrix.stack }}" --config="${{ matrix.config }}"
           rc=$?
           # Exit 5 = no tests selected; tolerated until the contract suite lands.
