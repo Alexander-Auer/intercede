@@ -47,7 +47,9 @@ _BACKENDS: dict[str, str] = {
     "fake": "intercede._backends.fake:FakeBackend",  # internal, for the test suites
     "htcondor-ce": "intercede._backends.monolith.htcondorce:HTCondorCEBackend",
 }
-_TRANSPORTS: dict[str, str] = {}
+_TRANSPORTS: dict[str, str] = {
+    "local": "intercede._backends.batch.transport.local:LocalTransport",
+}
 _SCHEDULERS: dict[str, str] = {}
 
 _GROUPS: dict[str, dict[str, str]] = {

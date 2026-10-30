@@ -175,7 +175,7 @@ class TestAvailable:
     def test_shipped_today(self):
         assert registry.available() == {
             "backend": ("htcondor-ce",),
-            "transport": (),
+            "transport": ("local",),
             "scheduler": (),
         }
 
