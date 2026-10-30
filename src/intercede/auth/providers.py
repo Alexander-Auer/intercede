@@ -21,7 +21,7 @@ class StaticCredentials:
     but it is still a context manager, like every provider::
 
         async with StaticCredentials([SSHPrivateKey(pem=key)]) as credentials:
-            backend = registry.backend(config, credentials)
+            backend = registry.get_backend(config, credentials)
     """
 
     def __init__(self, credentials: CredentialSet | Iterable[Credential] = ()) -> None:
@@ -44,7 +44,15 @@ class StaticCredentials:
         return None
 
     async def get(self, requirements: CredentialRequirements) -> CredentialSet:
-        """Return the held credentials of the requested kinds."""
+        """Return the held credentials of the requested kinds.
+
+        Args:
+            requirements: What the backend asks for.
+
+        Returns:
+            The held credentials whose kind is in ``requirements.kinds``. A
+            kind it does not hold is left out, for the backend to report.
+        """
         return CredentialSet(
             tuple(
                 credential

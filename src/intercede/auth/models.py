@@ -44,34 +44,44 @@ class Credential(_Model):
     Not used on its own: a provider returns one of the concrete kinds below.
     """
 
-    # None means it never goes stale (SSH secrets). Must carry a timezone, so
-    # it can be compared with the current time.
+    # Added to _Model's settings: a value given by mistake may be the secret
+    # itself, so no error message repeats one.
+    model_config = ConfigDict(hide_input_in_errors=True, use_attribute_docstrings=True)
+
     expires_at: AwareDatetime | None = None
+    """When the credential stops working, with a timezone, so it can be compared
+    with the current time. None means it never expires, as for SSH secrets."""
 
 
 class BearerToken(Credential):
     """A token for the channel to a CE. Opaque to interCEde."""
 
     value: SecretStr
+    """The token itself."""
 
 
 class X509Proxy(Credential):
     """An X.509 proxy: private key and certificate chain together, as PEM."""
 
     pem: SecretBytes
+    """The private key and certificate chain, PEM-encoded."""
 
 
 class SSHPrivateKey(Credential):
     """An SSH private key: the key itself, never a path on some host."""
 
     pem: SecretBytes
+    """The private key, PEM-encoded."""
+
     passphrase: SecretStr | None = None
+    """The passphrase the key is encrypted with, or None if it is not."""
 
 
 class SSHPassword(Credential):
     """A password for an SSH login."""
 
     value: SecretStr
+    """The password itself."""
 
 
 AnyCredential = BearerToken | X509Proxy | SSHPrivateKey | SSHPassword
@@ -92,7 +102,7 @@ class CredentialSet(RootModel[tuple[AnyCredential, ...]]):
         CredentialSet([BearerToken(value=token), X509Proxy(pem=proxy)])
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
     root: tuple[AnyCredential, ...] = ()
 
@@ -124,7 +134,14 @@ class CredentialSet(RootModel[tuple[AnyCredential, ...]]):
         return self
 
     def get(self, kind: type[C]) -> C | None:
-        """Return the credential of ``kind``, or None if the set has none."""
+        """Return the credential of one kind.
+
+        Args:
+            kind: The credential class to look for, e.g. ``BearerToken``.
+
+        Returns:
+            The set's credential of ``kind``, or None if it has none.
+        """
         for credential in self.root:
             if isinstance(credential, kind):
                 return credential
@@ -143,14 +160,20 @@ class CredentialRequirements(_Model):
     a consumer only meets it as the argument to its provider's ``get``.
     """
 
-    # Which backend instance is asking: the endpoint it talks to. For a token
-    # this is also the audience, in the form that CE expects. The same string
-    # as JobHandle.resource.
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
     resource: str
-    # Needed TOGETHER, not a menu of alternatives.
+    """Which backend instance is asking: the endpoint it talks to, the same
+    string as ``JobHandle.resource``. For a token this is also the audience,
+    in the form that CE expects."""
+
     kinds: frozenset[type[Credential]]
-    # For token kinds, the scopes for THIS operation; empty for the others.
+    """The kinds of credential needed, all of them together, not a choice
+    between alternatives."""
+
     scopes: frozenset[str] = frozenset()
+    """For token kinds, the scopes of the operation about to run; empty for
+    the others."""
 
     @model_validator(mode="after")
     def _concrete_kinds(self) -> Self:
