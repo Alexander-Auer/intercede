@@ -67,6 +67,14 @@ def test_defaults_are_filled_in():
     assert isinstance(ce, HTCondorCEConfig) and ce.max_output_files == 10_000
 
 
+@pytest.mark.parametrize(
+    "jump_host", ["gw.example.org", "gw.example.org:2222", "pilot@gw.example.org"]
+)
+def test_an_ssh_backend_can_go_through_a_jump_host(jump_host: str):
+    ssh = validate_config({**SSH, "jump_host": jump_host})
+    assert isinstance(ssh, BatchSSHConfig) and ssh.jump_host == jump_host
+
+
 def test_a_model_passes_through_unchanged():
     model = HTCondorCEConfig(kind="htcondor-ce", endpoint="ce:9619", queue="short")
     assert validate_config(model) == model
@@ -140,6 +148,8 @@ class TestRefused:
             ),
             ({**CLOUD, "driver_options": {"OS_PASSWORD": "x"}}, "credential provider"),
             ({**LOCAL, "max_output_files": 0}, "max_output_files"),
+            ({**SSH, "jump_host": "-oProxyCommand=x"}, "jump_host must be"),
+            ({**SSH, "jump_host": "gw.example.org:22:22"}, "jump_host must be"),
         ],
         ids=[
             "ssh-ce-auth",
@@ -147,6 +157,8 @@ class TestRefused:
             "launcher-no-image",
             "secret-driver-option",
             "zero-limit",
+            "jump-host-option",
+            "jump-host-two-ports",
         ],
     )
     def test_a_rule_of_the_kind(self, data: dict[str, Any], message: str):
