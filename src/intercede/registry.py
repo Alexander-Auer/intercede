@@ -49,6 +49,7 @@ _BACKENDS: dict[str, str] = {
 }
 _TRANSPORTS: dict[str, str] = {
     "local": "intercede._backends.batch.transport.local:LocalTransport",
+    "ssh": "intercede._backends.batch.transport.ssh:SSHTransport",
 }
 _SCHEDULERS: dict[str, str] = {}
 
