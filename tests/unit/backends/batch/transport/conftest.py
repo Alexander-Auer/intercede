@@ -2,7 +2,8 @@
 
 ``transport`` is parametrised over every transport the conformance suite runs
 against, each built through the registry, so the suite also covers its entry.
-Only the local transport exists for now.
+The SSH transport logs in to ``sshd``, a server in the test process whose
+commands and files live on this host, in the same ``home`` as the local one's.
 """
 
 from __future__ import annotations
@@ -14,12 +15,10 @@ import pytest
 
 from intercede._backends.batch.protocols import Transport
 from intercede.auth import StaticCredentials
-from intercede.config import BatchLocalConfig, BatchSSHConfig
+from intercede.config import BatchLocalConfig
 from intercede.registry import _load
 
-CONFIGS: dict[str, BatchLocalConfig | BatchSSHConfig] = {
-    "local": BatchLocalConfig(kind="batch", transport="local", scheduler="slurm"),
-}
+from ._sshd import SSHD
 
 
 @pytest.fixture
@@ -47,14 +46,23 @@ def here(tmp_path: Path) -> Path:
     return directory
 
 
-@pytest.fixture(params=sorted(CONFIGS))
+@pytest.fixture
+async def sshd(home: Path) -> AsyncIterator[SSHD]:
+    async with SSHD(home) as server:
+        yield server
+
+
+@pytest.fixture(params=["local", "ssh"])
 async def transport(
-    request: pytest.FixtureRequest, home: Path
+    request: pytest.FixtureRequest, sshd: SSHD
 ) -> AsyncIterator[Transport]:
-    config = CONFIGS[request.param]
-    built = _load("transport", config.transport).from_settings(
-        config, StaticCredentials()
-    )
+    if request.param == "local":
+        config = BatchLocalConfig(kind="batch", transport="local", scheduler="slurm")
+        credentials = StaticCredentials()
+    else:
+        config = sshd.config()
+        credentials = StaticCredentials([sshd.key()])
+    built = _load("transport", config.transport).from_settings(config, credentials)
     assert isinstance(built, Transport)
     async with built as instance:
         yield instance
