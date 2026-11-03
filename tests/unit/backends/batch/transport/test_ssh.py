@@ -14,7 +14,7 @@ from typing import Any
 import asyncssh
 import pytest
 
-from intercede._backends.batch.transport.ssh import SSHTransport
+from intercede._backends.batch.transport.ssh import SSHTransport, route
 from intercede.auth import (
     Credential,
     SSHPassword,
@@ -24,7 +24,7 @@ from intercede.auth import (
 from intercede.config import BatchSSHConfig
 from intercede.exceptions import AuthenticationError, ResourceUnavailableError
 
-from ._sshd import SSHD
+from ._sshd import HOST, SSHD, USER
 
 TIMEOUT = 30  # seconds
 CLOSED_PORT = 1  # nothing listens there, so connecting is refused at once
@@ -227,3 +227,40 @@ class TestAgent:
         async with transport(sshd.config(auth="agent")) as ssh:
             with pytest.raises(AuthenticationError, match="no SSH agent"):
                 await echo(ssh)
+
+
+class TestJumpHost:
+    @pytest.fixture
+    async def gateway(self, sshd: SSHD, home: Path) -> AsyncIterator[SSHD]:
+        async with SSHD(home, client_key=sshd.client_key) as server:
+            yield server
+
+    @pytest.mark.parametrize("named_user", [True, False], ids=["user@host", "host"])
+    async def test_connects_through_it(
+        self, sshd: SSHD, gateway: SSHD, named_user: bool
+    ):
+        jump_host = (
+            f"{USER}@{HOST}:{gateway.port}" if named_user else f"{HOST}:{gateway.port}"
+        )
+        config = sshd.config(
+            jump_host=jump_host,
+            known_hosts=f"{gateway.known_hosts()}\n{sshd.known_hosts()}",
+        )
+        async with transport(config, sshd.key()) as ssh:
+            assert await echo(ssh) == "ok\n"
+        assert (gateway.logins, gateway.forwarded, sshd.logins) == (1, 1, 1)
+        await eventually(lambda: gateway.connected == 0 == sshd.connected)
+
+    async def test_its_host_key_is_checked_too(self, sshd: SSHD, gateway: SSHD):
+        config = sshd.config(jump_host=f"{HOST}:{gateway.port}")  # only sshd's key
+        async with transport(config, sshd.key()) as ssh:
+            with pytest.raises(AuthenticationError, match="host key"):
+                await echo(ssh)
+        assert sshd.logins == 0
+
+    def test_the_route_defaults_the_user_and_port(self, sshd: SSHD):
+        config = sshd.config(jump_host="gw.example.org")
+        assert route(config) == [
+            (USER, "gw.example.org", 22),
+            (USER, HOST, sshd.port),
+        ]

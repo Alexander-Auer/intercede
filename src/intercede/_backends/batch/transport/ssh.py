@@ -7,10 +7,10 @@ for a POSIX shell (sh, bash, zsh; not csh). Files move over SFTP, whose paths
 no shell ever sees.
 
 One connection, opened at the first call, serves every call until the
-transport is closed, and is opened again if it drops. How it logs in is decided
-by the configuration and the credential provider alone: nothing on this host
-(``~/.ssh``, its config, an agent) is consulted, unless ``auth = "agent"`` asks
-for the agent.
+transport is closed, and is opened again if it drops; a jump host, when
+configured, carries it. How it logs in is decided by the configuration and the
+credential provider alone: nothing on this host (``~/.ssh``, its config, an
+agent) is consulted, unless ``auth = "agent"`` asks for the agent.
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ class SSHTransport:
 
         Args:
             settings: The batch backend's validated configuration: the host,
-                the login and the expected host keys.
+                the login, the expected host keys and the jump host.
             credentials: The consumer's provider, asked for a key or password
                 when the transport first connects.
 
@@ -319,15 +319,23 @@ def connect_options(
 
 
 def route(settings: BatchSSHConfig) -> list[tuple[str, str, int]]:
-    """List the logins to make, in order.
+    """List the logins to make, in order: the jump host, if any, then the resource.
 
     Args:
-        settings: The transport's configuration.
+        settings: The transport's configuration; its ``jump_host`` is
+            validated as ``[user@]host[:port]``.
 
     Returns:
-        A user, host and port per hop.
+        A user, host and port per hop. The jump host's user defaults to
+        ``settings.user``, its port to 22.
     """
-    return [(settings.user, settings.host, settings.port)]
+    hops = []
+    if settings.jump_host is not None:
+        user, _, address = settings.jump_host.rpartition("@")
+        host, _, port = address.partition(":")
+        hops.append((user or settings.user, host, int(port or 22)))
+    hops.append((settings.user, settings.host, settings.port))
+    return hops
 
 
 @asynccontextmanager
