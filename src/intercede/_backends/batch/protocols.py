@@ -1,6 +1,6 @@
 """Internal collaborator protocols of the composed backend.
 
-Shapes only: transports and schedulers are implemented in later issues.
+Transports are implemented in ``transport``; schedulers in a later issue.
 """
 
 from __future__ import annotations
@@ -35,6 +35,11 @@ class Transport(Protocol):
 
     Transports hold connections, so they share the backend lifecycle: cheap
     construction with no I/O, and an idempotent close.
+
+    Every transport behaves the same, so a backend never asks which one it has.
+    Commands start in the account's home directory on the resource, and a
+    relative path on the resource is relative to it. The caller picks every
+    timeout: it knows whether a call queries a job or stages gigabytes.
     """
 
     async def __aenter__(self) -> Self: ...
@@ -46,45 +51,63 @@ class Transport(Protocol):
         tb: TracebackType | None,
     ) -> None: ...
 
-    async def run(self, argv: Command) -> CommandResult:
+    async def run(self, argv: Command, *, timeout: float) -> CommandResult:
         """Run one command on the resource and wait for it to finish.
 
         Args:
-            argv: The program and its arguments. Never passed through a shell.
+            argv: The program and its arguments. Each argument reaches the
+                program exactly as given, whatever characters it holds.
+            timeout: How long the command may take, in seconds.
 
         Returns:
             The exit code and everything the command printed. A non-zero exit
             code is returned, not raised: the scheduler decides what it means.
+            As in a shell, a program that does not exist exits with 127, and
+            one that cannot be executed with 126.
 
         Raises:
-            ResourceUnavailableError: The resource could not be reached.
+            ResourceUnavailableError: The resource could not be reached, or
+                the command did not finish within ``timeout``.
             AuthenticationError: The resource rejected the credentials.
 
         """
         ...
 
-    async def put(self, local: Path, remote: str) -> None:
+    async def put(self, local: Path, remote: str, *, timeout: float) -> None:
         """Copy a file or directory from this host to the resource.
+
+        ``remote`` is the path the copy gets, never a directory to copy into:
+        an existing file there is replaced, and an existing directory receives
+        the copied directory's contents. Missing parent directories are
+        created, and permission bits are kept, so an executable stays one.
 
         Args:
             local: The file or directory on this host.
-            remote: Its destination path on the resource.
+            remote: The path of the copy on the resource.
+            timeout: How long the copy may take, in seconds.
 
         Raises:
-            ResourceUnavailableError: The copy failed.
+            ResourceUnavailableError: The copy failed, or did not finish
+                within ``timeout``.
+            AuthenticationError: The resource rejected the credentials.
 
         """
         ...
 
-    async def get(self, remote: str, local: Path) -> None:
+    async def get(self, remote: str, local: Path, *, timeout: float) -> None:
         """Copy a file or directory from the resource to this host.
+
+        The mirror of ``put``: ``local`` is the path the copy gets.
 
         Args:
             remote: The file or directory on the resource.
-            local: Its destination path on this host.
+            local: The path of the copy on this host.
+            timeout: How long the copy may take, in seconds.
 
         Raises:
-            ResourceUnavailableError: The copy failed.
+            ResourceUnavailableError: The copy failed, or did not finish
+                within ``timeout``.
+            AuthenticationError: The resource rejected the credentials.
 
         """
         ...
