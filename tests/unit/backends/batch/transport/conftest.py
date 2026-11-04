@@ -22,15 +22,6 @@ from ._sshd import SSHD
 
 
 @pytest.fixture
-def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """The account's home directory on the resource; a private one, never the real one."""
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    return home
-
-
-@pytest.fixture
 def remote(home: Path) -> str:
     """An empty directory on the resource, as the absolute path a backend would use."""
     directory = home / "work"
@@ -44,12 +35,6 @@ def here(tmp_path: Path) -> Path:
     directory = tmp_path / "here"
     directory.mkdir()
     return directory
-
-
-@pytest.fixture
-async def sshd(home: Path) -> AsyncIterator[SSHD]:
-    async with SSHD(home) as server:
-        yield server
 
 
 @pytest.fixture(params=["local", "ssh"])
