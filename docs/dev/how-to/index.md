@@ -2,3 +2,4 @@
 
 - [Run the integration tests locally](run-integration-tests-locally.md)
 - [Add an integration stack](add-an-integration-stack.md)
+- [Add a scheduler](add-a-scheduler.md)

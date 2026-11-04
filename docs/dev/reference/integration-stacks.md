@@ -114,14 +114,16 @@ Defined in `tests/conftest.py` (options) and `tests/integration/conftest.py` (fi
 | `--config` | option | Configuration name. Default: `basic`. |
 | `stack` | fixture | The stack's entry from `stacks.yml`. |
 | `stack_dir` | fixture | Folder with the stack's `compose.yml`. |
-| `client_config` | fixture | The stack's `intercede-client.toml`, already parsed. |
+| `client_config` | fixture | The stack's `intercede-client.toml`, already parsed. For type `ssh-key`, `[backend]` also gets the `known_hosts` file the stack created when it started. |
 | `refusals` | fixture | What `[refusals]` in `intercede-client.toml` says the backend cannot honour: `containers`, `url_inputs`, `url_outputs`. The shared suite checks each is refused at submit. |
-| `credentials` | fixture | A credential provider holding what `[credentials]` points to (types: `token`). |
+| `credentials` | fixture | A credential provider holding what `[credentials]` points to (types: `token`, `ssh-key`). Skips the test on a stack that needs none. |
+| `backend_credentials` | fixture | What a backend is built with: `credentials`, or an empty provider on a stack that needs none. |
 | `backend` | fixture | The backend `[backend]` describes, built by the registry and open. |
 | `credential` | fixture | The credential `[credentials]` points to, read from the stack's credentials folder. |
 | `rejected_credentials` | fixture | A provider holding a credential of the right kind that the resource rejects. |
 | `unreachable_config` | fixture | `[backend]`, pointed at a closed port, as when the resource is down. |
 | `output_retriever`, `killable`, `purgeable` | fixture | The backend as that capability; skips the test when the backend does not have it. |
+| `transport`, `remote`, `here` | fixture | A composed backend's transport on its own, an empty directory on the resource and one on this host; what `test_transport.py` runs on. |
 
 If `intercede-client.toml` is missing, the test fails in CI (when `$CI` is set) and is skipped
 locally. In CI, a job where every test is skipped would look green but test nothing.
