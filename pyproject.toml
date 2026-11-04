@@ -18,6 +18,7 @@ keywords = []
 license = { text = "GPL-3.0-only" }
 dynamic = ["version"]
 dependencies = [
+  "asyncssh>=2.24",
   "pydantic>=2"
 ]
 classifiers = [
