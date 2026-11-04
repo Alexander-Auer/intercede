@@ -1,0 +1,20 @@
+# Client half of the `basic` configuration. See docs/dev/reference/integration-stacks.md
+# Changes together with stacks/slurm/config/basic/, the backend half (rule 7).
+
+[stack]
+id = "ssh-slurm" # this stack's id in stacks.yml
+
+[backend]
+kind = "batch"
+transport = "ssh"
+scheduler = "slurm"
+# sshd in the container, published on the host (stacks/slurm/compose.yml).
+host = "127.0.0.1"
+port = 2222
+user = "dirac"
+# No `known_hosts`: the host key is created at every container start, so it is in the credentials
+# folder.
+
+[credentials]
+type = "ssh-key"                # an ed25519 key authorized for `dirac`
+path = "credentials/ssh-slurm/" # holds `id_ed25519` and `known_hosts`, created at every container start
