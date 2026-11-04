@@ -1,0 +1,11 @@
+# Client half of the `basic` configuration. See docs/dev/reference/integration-stacks.md
+# Changes together with stacks/slurm/config/basic/, the backend half (rule 7).
+
+[stack]
+id = "local-slurm" # this stack's id in stacks.yml
+
+[backend]
+kind = "batch"
+transport = "local"
+scheduler = "slurm"
+# No [credentials]: pytest runs in the container, as the user the jobs run as.

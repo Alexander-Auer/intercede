@@ -19,9 +19,16 @@ services:
       # Host-run harness: sshd, as the login node of a site. Not port 22 on the host, because a
       # laptop usually has its own sshd there.
       - "127.0.0.1:2222:22"
+    # Where `docker compose exec` starts: `local-slurm` runs the suite from the repository.
+    working_dir: /intercede
+    environment:
+      # The repository is read-only here, so pytest leaves nothing in it.
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTEST_ADDOPTS: -p no:cacheprovider
     volumes:
       # bind mount, not a named volume: the host-run harness must read the key
       - ./credentials:/shared/credentials
+      - ../../../..:/intercede:ro
       # backend half of the configuration, next to the stacks' intercede-client.toml
       - ./config/basic/slurm.conf:/etc/slurm/slurm.conf:ro
       - ./config/basic/cgroup.conf:/etc/slurm/cgroup.conf:ro

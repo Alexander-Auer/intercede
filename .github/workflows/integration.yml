@@ -64,8 +64,9 @@ jobs:
       - name: Run the contract suite
         run: |
           if [ "${{ matrix.exec_in_container }}" = "true" ]; then
-            # TODO(#13/#14): ship the suite in the image and exec as an unprivileged user.
-            runner=(docker compose -f "$COMPOSE_FILE" exec -T backend pytest)
+            # Inside the container, as the normal user jobs run as (compose.yml mounts the suite).
+            runner=(docker compose -f "$COMPOSE_FILE" exec -T -e CI --user dirac backend \
+              /opt/suite/bin/pytest -n "${{ matrix.workers }}")
           else
             # Independent tests, run side by side (stacks.yml `workers`).
             runner=(pixi run -e py313 pytest -n "${{ matrix.workers }}")

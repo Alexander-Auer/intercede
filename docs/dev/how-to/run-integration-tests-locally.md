@@ -23,16 +23,16 @@ CI runs the same commands as below, so you can reproduce any CI job on your mach
 `stacks.yml` if it sets one, or leave `-n` out to run one test at a time while debugging.
 
 For stacks with `exec_in_container: true` (the `local-*` stacks), run the tests inside the
-container instead:
+container instead, as its normal user (`dirac` for Slurm):
 
 ```sh
-docker compose -f tests/integration/stacks/<compose>/compose.yml exec --user <test-user> backend \
-  pytest tests/integration -m "<markers>" --stack=<id> --config=basic
+docker compose -f tests/integration/stacks/<compose>/compose.yml exec --user dirac backend \
+  /opt/suite/bin/pytest tests/integration -n 4 -m "<markers>" --stack=<id> --config=basic
 ```
 
-This does not work yet (#13, #14): the image must first contain pytest and the tests, and have a
-normal (not root) user. `--stack` is the stack `id` (for example `local-slurm`), not the compose
-folder (`slurm`).
+`--stack` is the stack `id` (for example `local-slurm`), not the compose folder (`slurm`). The tests
+are the ones you have checked out: the container mounts the repository, so there is nothing to
+rebuild after changing them.
 
 You can also leave a stack running and use it to develop against a real backend: point your client
 config at `localhost`.
