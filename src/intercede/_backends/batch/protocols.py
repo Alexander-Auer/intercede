@@ -1,6 +1,6 @@
 """Internal collaborator protocols of the composed backend.
 
-Transports are implemented in ``transport``; schedulers in a later issue. Moving
+Transports are implemented in ``transport``, schedulers in ``scheduler``. Moving
 a job's files is neither's job alone: the backend does it, with nothing but
 ``Transport.put`` and ``get``, so it is not a third collaborator (``Stager``).
 """
