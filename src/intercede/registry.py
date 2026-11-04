@@ -44,7 +44,9 @@ _BACKENDS: dict[str, str] = {
     "fake": "intercede._backends.fake:FakeBackend",  # internal, for the test suites
 }
 _TRANSPORTS: dict[str, str] = {}
-_SCHEDULERS: dict[str, str] = {}
+_SCHEDULERS: dict[str, str] = {
+    "slurm": "intercede._backends.batch.scheduler.slurm:Slurm",
+}
 
 _GROUPS: dict[str, dict[str, str]] = {
     "backend": _BACKENDS,
