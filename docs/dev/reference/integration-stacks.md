@@ -69,11 +69,13 @@ tests would run in both jobs. Add the same `and not ssh` to every new `local-*` 
 ## `exec_in_container: true`
 
 pytest runs inside the backend container, and interCEde talks to the scheduler directly, without
-SSH. For this to work (still to do, see #13 and #14):
+SSH. For this to work:
 
-- the image must contain pytest and the tests;
-- pytest must run as a normal user, not root, because HTCondor and Slurm refuse to run jobs as
-  root.
+- the image contains Python and what the suite needs (`/opt/suite` in the Slurm image);
+- `compose.yml` mounts the repository read-only and starts there (`working_dir`), so the tests are
+  the ones you have checked out;
+- pytest runs as a normal user, not root, because HTCondor and Slurm refuse to run jobs as root
+  (`dirac` in the Slurm image).
 
 ## Rules for a stack
 

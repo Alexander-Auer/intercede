@@ -24,6 +24,16 @@ RUN set -eux; \
     dnf clean all; \
     rm -rf /var/cache/dnf
 
+# The `local-slurm` stack runs the suite in this container: Python and what the suite needs, as
+# pyproject.toml lists them. The suite itself is the repository, which compose.yml mounts.
+RUN set -eux; \
+    dnf install -y python3.12; \
+    dnf clean all; \
+    rm -rf /var/cache/dnf; \
+    python3.12 -m venv /opt/suite; \
+    /opt/suite/bin/pip install --no-cache-dir \
+        asyncssh pydantic pytest pytest-asyncio pytest-xdist pyyaml
+
 # The packages do not create the account the Slurm daemons run as. Jobs run as `dirac`, because
 # jobs should not run as root. Its password is "*", not the default "!!": sshd refuses a locked
 # account even with a valid key.
