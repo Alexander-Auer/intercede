@@ -46,6 +46,7 @@ __all__ = ["available", "get_backend"]
 _BACKENDS: dict[str, str] = {
     "batch": "intercede._backends.batch.backend:BatchBackend",
     "fake": "intercede._backends.fake:FakeBackend",  # internal, for the test suites
+    "htcondor-ce": "intercede._backends.monolith.htcondorce:HTCondorCEBackend",
 }
 _TRANSPORTS: dict[str, str] = {
     "local": "intercede._backends.batch.transport.local:LocalTransport",

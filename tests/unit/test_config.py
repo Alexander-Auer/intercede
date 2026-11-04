@@ -75,6 +75,11 @@ def test_an_ssh_backend_can_go_through_a_jump_host(jump_host: str):
     assert isinstance(ssh, BatchSSHConfig) and ssh.jump_host == jump_host
 
 
+def test_an_htcondor_ce_can_name_its_schedd():
+    ce = validate_config({**CE, "schedd": "ce01@ce.example.org"})
+    assert isinstance(ce, HTCondorCEConfig) and ce.schedd == "ce01@ce.example.org"
+
+
 def test_a_batch_backend_keeps_its_files_in_a_workdir():
     assert validate_config(LOCAL).workdir == ".intercede"
     assert (
@@ -155,6 +160,8 @@ class TestRefused:
                 {**LOCAL, "container_launcher": ["apptainer", "exec"]},
                 "'{image}' placeholder",
             ),
+            ({**CE, "endpoint": "https://ce.example.org"}, "endpoint must be 'host'"),
+            ({**CE, "schedd": "-name evil"}, "schedd must be 'host' or 'name@host'"),
             ({**CLOUD, "driver_options": {"OS_PASSWORD": "x"}}, "credential provider"),
             ({**LOCAL, "max_output_files": 0}, "max_output_files"),
             ({**LOCAL, "workdir": ""}, "workdir must be a path"),
@@ -167,6 +174,8 @@ class TestRefused:
             "htcondor-ce-no-token",
             "ce-ssh-auth",
             "ssh-ce-auth",
+            "ce-endpoint-url",
+            "ce-schedd-option",
             "no-host-keys",
             "launcher-no-image",
             "secret-driver-option",
@@ -191,6 +200,9 @@ class TestNeverRepeatsAValue:
 
     def test_a_wrong_value(self):
         assert "toto4" not in rejected(**SSH, port="toto4")
+
+    def test_a_value_that_breaks_a_rule(self):
+        assert "toto4" not in rejected(**{**CE, "endpoint": "https://toto4"})
 
     def test_building_a_model_directly(self):
         with pytest.raises(ValueError) as exc_info:
