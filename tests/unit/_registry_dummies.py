@@ -17,6 +17,8 @@ class _Lifecycle:
 
 
 class DummyTransport(_Lifecycle):
+    resource = "dummy"
+
     def __init__(self, settings: Any) -> None:
         self.settings = settings
         self.credentials: Any = None

@@ -56,7 +56,7 @@ class SSHTransport:
         # Construction is cheap and does no I/O.
         self._settings = settings
         self._provider = credentials
-        self._resource = f"{settings.user}@{settings.host}:{settings.port}"
+        self.resource = f"{settings.user}@{settings.host}:{settings.port}"
         self._credentials: CredentialSet | None = None
         # The jump host first, if there is one; the resource last.
         self._hops: list[asyncssh.SSHClientConnection] = []
@@ -113,7 +113,7 @@ class SSHTransport:
                     raise
         if completed.returncode is None:  # neither an exit status nor a signal
             raise ResourceUnavailableError(
-                f"the connection to {self._resource} dropped before {argv[0]} finished"
+                f"the connection to {self.resource} dropped before {argv[0]} finished"
             )
         return CommandResult(
             returncode=completed.returncode,
@@ -207,7 +207,7 @@ class SSHTransport:
         try:
             async with _agent_keys(self._settings.auth == "agent") as agent_keys:
                 options = connect_options(
-                    self._settings, credentials, agent_keys, self._resource
+                    self._settings, credentials, agent_keys, self.resource
                 )
                 for user, host, port in route(self._settings):
                     tunnel = hops[-1] if hops else ()  # () is asyncssh's "none"
@@ -220,7 +220,7 @@ class SSHTransport:
             await _close(hops)  # a jump host the resource was not reached through
             if isinstance(exc, TimeoutError):  # asyncssh's connect_timeout
                 raise ResourceUnavailableError(
-                    f"connecting to {self._resource} took longer than "
+                    f"connecting to {self.resource} took longer than "
                     f"{self._settings.connect_timeout_s} s"
                 ) from exc
             raise
@@ -248,20 +248,20 @@ class SSHTransport:
             raise
         except TimeoutError as exc:
             raise ResourceUnavailableError(
-                f"{action} on {self._resource} did not finish within {timeout:g} s"
+                f"{action} on {self.resource} did not finish within {timeout:g} s"
             ) from exc
         except asyncssh.PermissionDenied as exc:
             raise AuthenticationError(
-                f"{self._resource} rejected the credentials: {exc.reason}"
+                f"{self.resource} rejected the credentials: {exc.reason}"
             ) from exc
         except asyncssh.HostKeyNotVerifiable as exc:
             raise AuthenticationError(
-                f"connecting to {self._resource} failed, its host key does not "
+                f"connecting to {self.resource} failed, its host key does not "
                 f"match known_hosts: {exc.reason}"
             ) from exc
         except (asyncssh.Error, OSError) as exc:  # also SFTP and local file errors
             raise ResourceUnavailableError(
-                f"{action} on {self._resource} failed: {exc}"
+                f"{action} on {self.resource} failed: {exc}"
             ) from exc
 
 
