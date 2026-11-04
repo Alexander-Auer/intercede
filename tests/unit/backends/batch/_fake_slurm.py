@@ -1,8 +1,8 @@
 """``sbatch``, ``squeue``, ``sacct`` and ``scancel``, for the composed backend's tests.
 
-This file is both: the fixture copies it to a directory on ``PATH`` under each
-tool's name, where it runs as a program and acts by that name, with its state in
-files; and the tests import ``FakeSlurm`` to look at that state and change it.
+This file is both: the fixture puts a small script on ``PATH`` per tool, which runs
+this file as a program with that tool's name and keeps its state in files; and the
+tests import ``FakeSlurm`` to look at that state and change it.
 It prints what the real tools were seen to print (``_slurm/test_core.py``). A job
 runs to its end during ``sbatch``, unless the cluster was told to ``hold`` them.
 """
@@ -152,10 +152,10 @@ def _scancel(state: dict[str, Any], argv: list[str]) -> int:
 
 
 def main() -> int:
-    tool = Path(sys.argv[0]).name
+    tool, *argv = sys.argv[1:]
     directory = Path(os.environ[STATE_VARIABLE])
     state = _load(directory)
-    state["calls"].append([tool, *sys.argv[1:]])
+    state["calls"].append([tool, *argv])
     if tool in state["broken"]:
         returncode, stdout, stderr = state["broken"][tool]
         print(stdout)
@@ -165,7 +165,7 @@ def main() -> int:
         _save(directory, state)
         return returncode
     code = {"sbatch": _sbatch, "squeue": _squeue, "sacct": _sacct, "scancel": _scancel}
-    returncode = code[tool](state, sys.argv[1:])
+    returncode = code[tool](state, argv)
     _save(directory, state)
     return returncode
 
