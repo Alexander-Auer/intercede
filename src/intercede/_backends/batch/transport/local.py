@@ -22,6 +22,8 @@ from intercede.exceptions import ResourceUnavailableError
 class LocalTransport:
     """Runs commands and copies files on this host."""
 
+    resource = "localhost"
+
     @classmethod
     def from_settings(
         cls, settings: BatchLocalConfig, credentials: CredentialProvider

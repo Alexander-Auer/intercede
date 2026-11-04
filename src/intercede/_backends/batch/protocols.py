@@ -51,7 +51,13 @@ class Transport(Protocol):
     Commands start in the account's home directory on the resource, and a
     relative path on the resource is relative to it. The caller picks every
     timeout: it knows whether a call queries a job or stages gigabytes.
+
+    Attributes:
+        resource: Which resource it reaches, for job handles and error messages.
+
     """
+
+    resource: str
 
     async def __aenter__(self) -> Self: ...
 
