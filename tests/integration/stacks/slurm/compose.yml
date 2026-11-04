@@ -1,0 +1,49 @@
+# The `slurm` compose environment: a one-machine Slurm cluster with accounting. The `ssh-slurm` and
+# `local-slurm` stacks share it and differ only in how the tests reach it (stacks.yml `compose`).
+# Rules: docs/dev/reference/integration-stacks.md
+# The harness drives the service named `backend`.
+services:
+  backend:
+    # Until CI publishes images (#14): ghcr.io/diracgrid/intercede-testenv/slurm:<version>.
+    image: intercede-testenv/slurm:${BACKEND_VERSION:-latest}
+    build:
+      context: ../_images/slurm
+    hostname: backend
+    # slurmd's cgroup plugin must create cgroups and move itself into them, and Slurm 22.05 has no
+    # way to turn it off. A writable /sys/fs/cgroup with CAP_SYS_ADMIN is not enough.
+    privileged: true
+    cgroup: private
+    networks:
+      - stack
+    ports:
+      # Host-run harness: sshd, as the login node of a site. Not port 22 on the host, because a
+      # laptop usually has its own sshd there.
+      - "127.0.0.1:2222:22"
+    # Where `docker compose exec` starts: `local-slurm` runs the suite from the repository.
+    working_dir: /intercede
+    environment:
+      # The repository is read-only here, so pytest leaves nothing in it.
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTEST_ADDOPTS: -p no:cacheprovider
+    volumes:
+      # bind mount, not a named volume: the host-run harness must read the key
+      - ./credentials:/shared/credentials
+      - ../../../..:/intercede:ro
+      # backend half of the configuration, next to the stacks' intercede-client.toml
+      - ./config/basic/slurm.conf:/etc/slurm/slurm.conf:ro
+      - ./config/basic/cgroup.conf:/etc/slurm/cgroup.conf:ro
+    healthcheck:
+      # Ready when the node can take jobs, accounting knows the cluster and sshd accepts connections.
+      test:
+        - CMD-SHELL
+        - >-
+          sinfo --noheader --format=%T | grep -qE '^(idle|mixed|allocated)$' &&
+          sacctmgr --noheader list cluster format=cluster | grep -q intercede &&
+          : </dev/tcp/127.0.0.1/22
+      interval: 5s
+      timeout: 10s
+      retries: 24
+      start_period: 30s
+
+networks:
+  stack: {}
