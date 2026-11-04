@@ -3,13 +3,18 @@
 It does with what the transport sends what OpenSSH's sshd does: a command goes
 to ``sh -c`` in the home directory, and SFTP paths are relative to that home.
 It also counts what happens, so the SSH-only tests can check connection reuse,
-the session limit and the jump host.
+the session limit, the signals sent and the jump host.
+
+One difference remains: asyncssh ends a session as soon as the client closes it,
+where sshd waits for the command. So a client that only closes returns at once
+here and hangs on a real server; a test looks at ``signals`` to tell them apart.
 """
 
 from __future__ import annotations
 
 import asyncio
 import posixpath
+import signal
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
@@ -37,6 +42,7 @@ class SSHD:
         self.started = asyncio.Event()  # set when a command starts
         self.most_at_once = 0
         self.forwarded = 0  # connections passed on to another host, as a jump host
+        self.signals: list[str] = []  # the signals clients sent to their commands
         self._running = 0
         self._connections: set[asyncssh.SSHServerConnection] = set()
         self._children: set[asyncio.subprocess.Process] = set()
@@ -133,7 +139,9 @@ class SSHD:
                 stderr=asyncio.subprocess.PIPE,
             )
             self._children.add(child)
+            passing_on = asyncio.create_task(self._pass_on_signals(process, child))
             stdout, stderr = await child.communicate(stdin)
+            passing_on.cancel()
             process.stdout.write(stdout)
             process.stderr.write(stderr)
             process.exit(child.returncode if child.returncode is not None else -1)
@@ -141,6 +149,20 @@ class SSHD:
             pass  # the client went away first, e.g. after its timeout
         finally:
             self._running -= 1
+
+    async def _pass_on_signals(
+        self,
+        process: asyncssh.SSHServerProcess[bytes],
+        child: asyncio.subprocess.Process,
+    ) -> None:
+        """Send a command the signals its client sends, as sshd does."""
+        while True:
+            try:
+                await process.stdin.read()  # past end of input it only raises signals
+            except asyncssh.SignalReceived as received:
+                self.signals.append(received.signal)
+                child.send_signal(getattr(signal, f"SIG{received.signal}"))
+            await asyncio.sleep(0.01)
 
 
 class _Login(asyncssh.SSHServer):
