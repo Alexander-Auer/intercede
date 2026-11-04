@@ -14,13 +14,13 @@ import posixpath
 import re
 import tempfile
 import uuid
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import suppress
 from pathlib import Path
 from types import TracebackType
 from typing import Self
 
-from intercede._backends.batch import job
+from intercede._backends.batch import job, layout
 from intercede._backends.batch.protocols import (
     Command,
     CommandResult,
@@ -40,22 +40,24 @@ from intercede.models import (
     JobHandle,
     JobID,
     JobStatus,
+    OpOutcome,
     StatusMap,
     Submission,
     SubmissionSpec,
 )
-from intercede.protocols import JobBackend
+from intercede.protocols import JobBackend, Killable, Purgeable
 
 BACKEND = "batch"
 COMMAND_TIMEOUT_S = 120  # every command but copying files, which uses the limits
 CHUNK = 100  # job IDs per command line, so a poll of thousands of jobs stays bounded
 
+_ACTIVE = frozenset({JobStatus.SUBMITTED, JobStatus.WAITING, JobStatus.RUNNING})
 _SUBMISSION = re.compile(r"[0-9a-f]{32}")
 _COPY = re.compile(r"[0-9]+")
 
 
 class BatchBackend:
-    """A batch system through a transport: submit and status."""
+    """A batch system through a transport: submit, status, kill and purge."""
 
     def __init__(
         self,
@@ -184,6 +186,81 @@ class BatchBackend:
             for handle in handles
         }
 
+    # -- Killable / Purgeable ----------------------------------------------
+
+    async def kill(
+        self, handles: Sequence[JobHandle]
+    ) -> Mapping[JobHandle, OpOutcome[None]]:
+        self._check_usable()
+        ids = self._ids(handles)
+        states = await self._states(ids)
+        # Only active jobs: a finished one has nothing left to cancel.
+        refused = await self._cancel([i for i in ids if states.get(i) in _ACTIVE])
+        results = {}
+        for handle in handles:
+            state = states.get(handle.id) if self._owns(handle) else None
+            if state is None:
+                results[handle] = OpOutcome[None](ok=False, reason="unknown job")
+            elif handle.id in refused:
+                results[handle] = OpOutcome[None](ok=False, reason=refused[handle.id])
+            elif state in _ACTIVE:
+                results[handle] = OpOutcome[None](ok=True)
+            else:
+                results[handle] = OpOutcome[None](ok=True, reason="already finished")
+        return results
+
+    async def purge(
+        self, handles: Sequence[JobHandle]
+    ) -> Mapping[JobHandle, OpOutcome[None]]:
+        self._check_usable()
+        ids = self._ids(handles)
+        states = await self._states(ids)
+        refused = await self._cancel([i for i in ids if states.get(i) in _ACTIVE])
+        ours = [h for h in handles if self._owns(h) and h.id not in refused]
+        failed = await self._remove(ours)
+        results = {}
+        for handle in handles:
+            if not self._owns(handle):
+                results[handle] = OpOutcome[None](ok=False, reason="unknown job")
+            elif handle.id in refused or handle in failed:
+                reason = refused.get(handle.id) or failed[handle]
+                results[handle] = OpOutcome[None](ok=False, reason=reason)
+            else:
+                results[handle] = OpOutcome[None](ok=True)
+        return results
+
+    async def _cancel(self, ids: Sequence[JobID]) -> dict[JobID, str]:
+        """Cancel jobs; return the reason for each that was not cancelled."""
+        failures: dict[JobID, str] = {}
+        for chunk in _chunks(ids):
+            result = await self._run(self._scheduler.kill_command(chunk))
+            if result.returncode != 0:
+                failures.update(dict.fromkeys(chunk, _reason(result)))
+        if not failures:
+            return {}
+        # A tool does not say which ID failed, so see what really happened: a
+        # job may also have ended in the meantime.
+        states = await self._states(list(failures))
+        return {i: why for i, why in failures.items() if states.get(i) in _ACTIVE}
+
+    async def _remove(self, handles: Sequence[JobHandle]) -> dict[JobHandle, str]:
+        """Remove jobs' files; return the reason for each whose files could not be."""
+        failed: dict[JobHandle, str] = {}
+        unique = list(dict.fromkeys(handles))
+        for start in range(0, len(unique), CHUNK):
+            chunk = unique[start : start + CHUNK]
+            result = await self._run(["rm", "-rf", *map(self._copy_dir, chunk)])
+            if result.returncode != 0:
+                failed.update(dict.fromkeys(chunk, _reason(result)))
+        submissions = {h.routing["submission"] for h in unique if h not in failed}
+        for submission in submissions:
+            workdir = self._submission_dir(submission)
+            # Fails while other copies remain, which then still need the inputs.
+            emptied = await self._run(["rmdir", f"{workdir}/{layout.COPIES}"])
+            if emptied.returncode == 0:
+                await self._run(["rm", "-rf", workdir])
+        return failed
+
     # -- talking to the resource -------------------------------------------
 
     async def _states(self, ids: Sequence[JobID]) -> dict[JobID, JobStatus]:
@@ -253,10 +330,24 @@ class BatchBackend:
     def _submission_dir(self, submission: str) -> str:
         return posixpath.join(self._settings.workdir, submission)
 
+    def _copy_dir(self, handle: JobHandle) -> str:
+        """Return a job's directory, built from checked values: see ``_owns``."""
+        return posixpath.join(
+            self._submission_dir(handle.routing["submission"]),
+            layout.copy_dir(handle.routing["copy"]),
+        )
+
 
 def _chunks(ids: Sequence[JobID]) -> list[Sequence[JobID]]:
     return [ids[start : start + CHUNK] for start in range(0, len(ids), CHUNK)]
 
 
+def _reason(result: CommandResult) -> str:
+    lines = [line.strip() for line in result.stderr.splitlines() if line.strip()]
+    return lines[-1] if lines else f"exit code {result.returncode}"
+
+
 # The type checker proves conformance.
 _backend: type[JobBackend] = BatchBackend
+_kill: type[Killable] = BatchBackend
+_purge: type[Purgeable] = BatchBackend
