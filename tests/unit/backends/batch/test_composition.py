@@ -14,7 +14,7 @@ from intercede import registry
 from intercede.auth import StaticCredentials
 from intercede.exceptions import ConfigurationError
 from intercede.models import JobStatus, SubmissionSpec
-from intercede.protocols import JobBackend
+from intercede.protocols import JobBackend, Killable, Purgeable
 
 from ._fake_slurm import FakeSlurm
 from .conftest import config_of
@@ -136,6 +136,8 @@ class TestTheBackend:
     def test_it_has_the_contracts_capabilities(self, sshd: SSHD):
         built = registry.get_backend(config_of("local", sshd), StaticCredentials())
         assert isinstance(built, JobBackend)
+        assert isinstance(built, Killable)
+        assert isinstance(built, Purgeable)
 
     def test_building_needs_neither_tools_nor_credentials(self, sshd: SSHD):
         built: Any = registry.get_backend(config_of("ssh", sshd), StaticCredentials())
