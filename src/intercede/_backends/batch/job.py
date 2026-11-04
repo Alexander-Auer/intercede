@@ -15,13 +15,32 @@ import shutil
 from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
 
+from pydantic import BaseModel, ConfigDict
+
 from intercede._backends.batch import layout
 from intercede.exceptions import SpecificationRejectedError
-from intercede.models import CopyVars, SubmissionSpec
+from intercede.models import CopyVars, SubmissionSpec, WorkdirName
 
 _VARIABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+MANIFEST = "manifest.json"
 # The way up from a copy's working directory to its submission's.
 _UP = "../../.."
+
+
+class Manifest(BaseModel):
+    """What collecting a job's output needs to know of its specification.
+
+    A file on the resource next to the job, since a backend remembers no jobs and
+    a handle should stay small. Read back from there, so it is validated again.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    stdout: WorkdirName  # relative to the copy's directory, like stderr
+    stderr: WorkdirName
+    members: Sequence[WorkdirName] = ()  # names and globs in the working directory
+    include_unlisted: bool = False
+    staged: Sequence[WorkdirName] = ()  # inputs and secrets: never swept up as output
 
 
 def check(
@@ -114,6 +133,29 @@ def runner(
     return "\n".join(lines) + "\n"
 
 
+def manifest(spec: SubmissionSpec, copies: Sequence[CopyVars]) -> Manifest:
+    """Say what collecting the output of this submission's jobs needs to know.
+
+    Args:
+        spec: What every copy shares.
+        copies: What differs per copy.
+
+    Returns:
+        The manifest. Its ``staged`` holds the secrets of every copy: not one
+        manifest per copy for a name only another copy uses as a secret.
+    """
+    secrets = {name for copy in copies for name in copy.secrets}
+    return Manifest(
+        stdout=f"{layout.WORK}/{spec.stdout}" if spec.stdout else "stdout",
+        stderr=f"{layout.WORK}/{spec.stderr}" if spec.stderr else "stderr",
+        members=[member.pattern for member in spec.outputs.members]
+        if spec.outputs
+        else [],
+        include_unlisted=spec.outputs.include_unlisted if spec.outputs else False,
+        staged=sorted(secrets | {ref.name for ref in spec.inputs}),
+    )
+
+
 def stage(
     spec: SubmissionSpec,
     copies: Sequence[CopyVars],
@@ -139,6 +181,7 @@ def stage(
     """
     directory.mkdir(mode=0o700)
     _write(directory / layout.RUNNER, runner(spec, copies, launcher))
+    _write(directory / MANIFEST, manifest(spec, copies).model_dump_json())
     for name, content in files.items():
         _write(directory / name, content)
     if Path(spec.executable).is_file():
