@@ -28,7 +28,7 @@ import asyncssh
 
 from intercede._backends.batch.protocols import Command, CommandResult
 from intercede._backends.credentials import credential_requirements, refresh_if_stale
-from intercede.auth.models import CredentialSet, SSHPassword, SSHPrivateKey
+from intercede.auth.models import Credential, SSHPassword, SSHPrivateKey
 from intercede.auth.protocols import CredentialProvider
 from intercede.config import BatchSSHConfig
 from intercede.exceptions import (
@@ -57,7 +57,7 @@ class SSHTransport:
         self._settings = settings
         self._provider = credentials
         self._resource = f"{settings.user}@{settings.host}:{settings.port}"
-        self._credentials: CredentialSet | None = None
+        self._credential: Credential | None = None
         # The jump host first, if there is one; the resource last.
         self._hops: list[asyncssh.SSHClientConnection] = []
         self._connecting = asyncio.Lock()
@@ -202,12 +202,12 @@ class SSHTransport:
             return self._hops[-1]
 
     async def _connect(self) -> list[asyncssh.SSHClientConnection]:
-        credentials = await self._fresh()
+        credential = await self._fresh()
         hops: list[asyncssh.SSHClientConnection] = []
         try:
             async with _agent_keys(self._settings.auth == "agent") as agent_keys:
                 options = connect_options(
-                    self._settings, credentials, agent_keys, self._resource
+                    self._settings, credential, agent_keys, self._resource
                 )
                 for user, host, port in route(self._settings):
                     tunnel = hops[-1] if hops else ()  # () is asyncssh's "none"
@@ -230,14 +230,14 @@ class SSHTransport:
         hops, self._hops = self._hops, []
         await _close(hops)
 
-    async def _fresh(self) -> CredentialSet | None:
+    async def _fresh(self) -> Credential | None:
         requirements = credential_requirements(self._settings)
         if requirements is None:  # the agent holds the key
             return None
-        self._credentials = await refresh_if_stale(
-            self._credentials, requirements, self._provider
+        self._credential = await refresh_if_stale(
+            self._credential, requirements, self._provider
         )
-        return self._credentials
+        return self._credential
 
     @contextmanager
     def _errors(self, action: str, timeout: float) -> Generator[None, None, None]:
@@ -267,7 +267,7 @@ class SSHTransport:
 
 def connect_options(
     settings: BatchSSHConfig,
-    credentials: CredentialSet | None,
+    credential: Credential | None,
     agent_keys: Sequence[asyncssh.SSHKeyPair],
     resource: str,
 ) -> dict[str, Any]:
@@ -278,7 +278,7 @@ def connect_options(
 
     Args:
         settings: The transport's configuration.
-        credentials: What the provider returned; None in agent mode.
+        credential: What the provider returned; None in agent mode.
         agent_keys: The agent's keys in agent mode; empty otherwise.
         resource: The login, for error messages.
 
@@ -297,21 +297,27 @@ def connect_options(
         "connect_timeout": settings.connect_timeout_s,
     }
     if settings.auth == "password":
-        password = credentials.get(SSHPassword) if credentials else None
-        assert password is not None  # refresh_if_stale checked it is there
+        assert isinstance(credential, SSHPassword)  # refresh_if_stale checked the kind
         return {
             **options,
             "client_keys": None,  # neither ~/.ssh nor the agent
-            "password": password.value.get_secret_value(),
+            "password": credential.value.get_secret_value(),
             "preferred_auth": ["keyboard-interactive", "password"],
         }
     if settings.auth == "key":
-        key = credentials.get(SSHPrivateKey) if credentials else None
-        assert key is not None  # refresh_if_stale checked it is there
-        passphrase = key.passphrase.get_secret_value() if key.passphrase else None
+        assert isinstance(
+            credential, SSHPrivateKey
+        )  # refresh_if_stale checked the kind
+        passphrase = (
+            credential.passphrase.get_secret_value() if credential.passphrase else None
+        )
         keys: Sequence[asyncssh.SSHKey | asyncssh.SSHKeyPair]
         try:
-            keys = [asyncssh.import_private_key(key.pem.get_secret_value(), passphrase)]
+            keys = [
+                asyncssh.import_private_key(
+                    credential.pem.get_secret_value(), passphrase
+                )
+            ]
         except (asyncssh.KeyImportError, asyncssh.KeyEncryptionError) as exc:
             # Only the type: the message may quote the key.
             raise AuthenticationError(
