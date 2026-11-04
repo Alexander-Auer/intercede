@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import posixpath
 import re
+import shutil
 import tempfile
 import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -19,8 +20,11 @@ from contextlib import suppress
 from pathlib import Path
 from types import TracebackType
 from typing import Self
+from urllib.parse import quote
 
-from intercede._backends.batch import job, layout
+from pydantic import ValidationError
+
+from intercede._backends.batch import collect, job, layout
 from intercede._backends.batch.protocols import (
     Command,
     CommandResult,
@@ -39,17 +43,19 @@ from intercede.models import (
     CopyVars,
     JobHandle,
     JobID,
+    JobOutput,
     JobStatus,
     OpOutcome,
     StatusMap,
     Submission,
     SubmissionSpec,
 )
-from intercede.protocols import JobBackend, Killable, Purgeable
+from intercede.protocols import JobBackend, Killable, OutputRetriever, Purgeable
 
 BACKEND = "batch"
 COMMAND_TIMEOUT_S = 120  # every command but copying files, which uses the limits
 CHUNK = 100  # job IDs per command line, so a poll of thousands of jobs stays bounded
+PARALLEL_TRANSFERS = 4
 
 _ACTIVE = frozenset({JobStatus.SUBMITTED, JobStatus.WAITING, JobStatus.RUNNING})
 _SUBMISSION = re.compile(r"[0-9a-f]{32}")
@@ -57,7 +63,7 @@ _COPY = re.compile(r"[0-9]+")
 
 
 class BatchBackend:
-    """A batch system through a transport: submit, status, kill and purge."""
+    """A batch system: submit, status, output, kill and purge, through a transport."""
 
     def __init__(
         self,
@@ -185,6 +191,95 @@ class BatchBackend:
             else JobStatus.UNKNOWN
             for handle in handles
         }
+
+    # -- OutputRetriever ---------------------------------------------------
+
+    async def get_output(
+        self, handles: Sequence[JobHandle], dest: Path
+    ) -> Mapping[JobHandle, OpOutcome[JobOutput]]:
+        self._check_usable()
+        states = await self._states(self._ids(handles))
+        results: dict[JobHandle, OpOutcome[JobOutput]] = {}
+        ready: dict[JobHandle, None] = {}  # each once, in the caller's order
+        for handle in handles:
+            state = states.get(handle.id) if self._owns(handle) else None
+            if state is None:
+                results[handle] = _not_collected("unknown job")
+            elif state in _ACTIVE:
+                results[handle] = _not_collected("job has not finished")
+            else:
+                ready[handle] = None
+
+        limit = asyncio.Semaphore(PARALLEL_TRANSFERS)
+
+        async def fetch(handle: JobHandle) -> None:
+            async with limit:
+                results[handle] = await self._collect(handle, dest)
+
+        await asyncio.gather(*(fetch(handle) for handle in ready))
+        return {handle: results[handle] for handle in handles}  # in the caller's order
+
+    async def _collect(self, handle: JobHandle, dest: Path) -> OpOutcome[JobOutput]:
+        """Copy what a finished job's specification asks for into ``dest``."""
+        directory = self._copy_dir(handle)
+        target = dest / quote(self.resource, safe="") / handle.id
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            manifest = await self._read_manifest(handle)
+            listed = await self._run(collect.listing_command(directory))
+            if manifest is None or listed.returncode != 0:
+                return _not_collected("the job was purged; its output is gone")
+            selection = collect.select(
+                collect.parse_listing(listed.stdout),
+                manifest,
+                max_files=self._settings.max_output_files,
+                max_bytes=self._settings.max_output_bytes,
+            )
+            async with asyncio.timeout(self._settings.transfer_timeout_s):
+                return await self._copy(selection, directory, target)
+        except (ValueError, OSError, ResourceUnavailableError) as exc:
+            return _not_collected(str(exc))
+        except TimeoutError:
+            return _not_collected(
+                f"collecting took longer than {self._settings.transfer_timeout_s} s"
+            )
+
+    async def _read_manifest(self, handle: JobHandle) -> job.Manifest | None:
+        submission = self._submission_dir(handle.routing["submission"])
+        result = await self._run(["cat", posixpath.join(submission, job.MANIFEST)])
+        if result.returncode != 0:
+            return None
+        try:
+            return job.Manifest.model_validate_json(result.stdout)
+        except ValidationError:
+            raise ValueError("the job's manifest cannot be read") from None
+
+    async def _copy(
+        self, selection: collect.Selection, directory: str, target: Path
+    ) -> OpOutcome[JobOutput]:
+        """Copy into a new directory and put it in place only when all of it arrived."""
+        partial = Path(tempfile.mkdtemp(prefix=".partial-", dir=target.parent))
+        timeout = self._settings.transfer_timeout_s
+
+        async def fetch(name: str, local: Path) -> Path:
+            remote = posixpath.join(directory, name)
+            await self._transport.get(remote, local, timeout=timeout)
+            return target / local.relative_to(partial)
+
+        try:
+            streams: dict[str, Path] = {}
+            for field in ("stdout", "stderr", "log"):
+                if (name := getattr(selection, field)) is not None:
+                    streams[field] = await fetch(name, partial / field)
+            files = {}
+            for name in selection.files:
+                member = name.removeprefix(f"{layout.WORK}/")
+                files[member] = await fetch(name, partial / "files" / member)
+            shutil.rmtree(target, ignore_errors=True)  # a previous collection
+            partial.rename(target)
+        finally:
+            shutil.rmtree(partial, ignore_errors=True)
+        return OpOutcome[JobOutput](ok=True, value=JobOutput(files=files, **streams))
 
     # -- Killable / Purgeable ----------------------------------------------
 
@@ -347,7 +442,12 @@ def _reason(result: CommandResult) -> str:
     return lines[-1] if lines else f"exit code {result.returncode}"
 
 
+def _not_collected(reason: str) -> OpOutcome[JobOutput]:
+    return OpOutcome[JobOutput](ok=False, reason=reason)
+
+
 # The type checker proves conformance.
 _backend: type[JobBackend] = BatchBackend
+_output: type[OutputRetriever] = BatchBackend
 _kill: type[Killable] = BatchBackend
 _purge: type[Purgeable] = BatchBackend
