@@ -8,6 +8,7 @@ each test runs through the public interface, with ``sbatch`` and the others on
 from __future__ import annotations
 
 import os
+import shlex
 import sys
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
@@ -43,9 +44,12 @@ def slurm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _fake_slurm.FakeSl
     """Slurm's tools on ``PATH``, for this test only."""
     tools = tmp_path / "bin"
     tools.mkdir()
+    # A script that starts Python, not a "#!" line that names it: such a line
+    # cannot hold a path with a space in it.
+    program = shlex.join([sys.executable, _fake_slurm.__file__])
     for name in _fake_slurm.TOOLS:
         tool = tools / name
-        tool.write_text(f"#!{sys.executable}\n{Path(_fake_slurm.__file__).read_text()}")
+        tool.write_text(f'#!/bin/sh\nexec {program} {name} "$@"\n')
         tool.chmod(0o755)
     state = tmp_path / "slurm"
     state.mkdir()
