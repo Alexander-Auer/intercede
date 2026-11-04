@@ -134,6 +134,23 @@ class TestConnection:
 
 
 class TestLogin:
+    @pytest.mark.parametrize(
+        ("auth", "kind"), [("key", "SSHPrivateKey"), ("password", "SSHPassword")]
+    )
+    async def test_a_provider_without_the_credential_is_refused(
+        self, sshd: SSHD, auth: str, kind: str
+    ):
+        async with transport(sshd.config(auth=auth)) as ssh:
+            with pytest.raises(AuthenticationError, match=f"no {kind} for dirac@"):
+                await echo(ssh)
+        assert sshd.logins == 0
+
+    async def test_only_the_configured_kind_is_used(self, sshd: SSHD):
+        # A provider may hold several kinds; a transport only gets the one it asks for.
+        config = sshd.config(auth="password")
+        async with transport(config, sshd.key(), sshd.password()) as ssh:
+            assert await echo(ssh) == "ok\n"
+
     async def test_with_a_password(self, sshd: SSHD):
         async with transport(sshd.config(auth="password"), sshd.password()) as ssh:
             assert await echo(ssh) == "ok\n"
