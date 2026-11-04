@@ -201,6 +201,16 @@ class _BatchConfig(_QueueConfig):
     scheduler: Literal["slurm", "htcondor", "direct"]
     """The batch system on the resource; ``"direct"`` runs jobs without one."""
 
+    workdir: str = ".intercede"
+    """Where on the resource jobs' files are kept until they are purged; relative
+    to the home directory unless absolute. The workers must see it too."""
+
+    @model_validator(mode="after")
+    def _workdir_is_a_path(self) -> Self:
+        if not self.workdir.strip() or self.workdir.startswith("-"):
+            raise ValueError("workdir must be a path, and not start with '-'")
+        return self
+
 
 class BatchLocalConfig(_BatchConfig):
     """A batch system on this host."""
