@@ -143,7 +143,11 @@ class TestRefused:
 
 class TestAvailable:
     def test_shipped_today(self):
-        assert registry.available() == {"backend": (), "transport": (), "scheduler": ()}
+        assert registry.available() == {
+            "backend": (),
+            "transport": (),
+            "scheduler": ("slurm",),
+        }
 
     def test_lists_only_what_a_configuration_can_ask_for(
         self, composed: None, monkeypatch: pytest.MonkeyPatch
