@@ -23,7 +23,7 @@ from intercede._backends.monolith.htcondorce.session import (
     credential_files,
     failure,
 )
-from intercede.auth.models import CredentialSet
+from intercede.auth.models import BearerToken
 from intercede.auth.protocols import CredentialProvider
 from intercede.config import HTCondorCEConfig
 from intercede.exceptions import InterCEdeError, SpecificationRejectedError
@@ -79,7 +79,7 @@ class HTCondorCEBackend:
         self._pool = f"{self._host}:{port}"
         # The CE's schedd is named after its host unless the site says otherwise.
         self._name = settings.schedd or self._host
-        self._credentials: dict[frozenset[str], CredentialSet] = {}  # per scope set
+        self._tokens: dict[frozenset[str], BearerToken] = {}  # per scope set
         # Only jobs being collected right now: a lock disappears with its last
         # user, so the backend keeps no record of the jobs it has seen.
         self._collecting: weakref.WeakValueDictionary[JobID, asyncio.Lock] = (
@@ -95,8 +95,8 @@ class HTCondorCEBackend:
 
         Args:
             settings: The CE's validated configuration.
-            credentials: The consumer's provider, asked for a token (and a
-                proxy, if configured) when an operation first needs one.
+            credentials: The consumer's provider, asked for a token when an
+                operation first needs one.
 
         Returns:
             A new backend, not yet opened.
@@ -120,9 +120,9 @@ class HTCondorCEBackend:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        # Idempotent. Cached credentials are dropped; they were never written anywhere.
+        # Idempotent. Cached tokens are dropped; they were never written anywhere.
         self._closed = True
-        self._credentials.clear()
+        self._tokens.clear()
 
     # -- Submitter ---------------------------------------------------------
 
@@ -169,9 +169,6 @@ class HTCondorCEBackend:
                         memory_mb=spec.resources.memory_mb,
                         wall_time_s=spec.resources.wall_time_s,
                         queue=spec.resources.queue or self._settings.queue,
-                        proxy_file=str(session.files.proxy)
-                        if session.files.proxy
-                        else None,
                     )
                     description = submission / f"group-{group[0]}.sub"
                     description.write_text(render(plan))
@@ -345,19 +342,20 @@ class HTCondorCEBackend:
 
     @asynccontextmanager
     async def _session(self, scopes: frozenset[str]) -> AsyncGenerator[CondorSession]:
-        """Open the tools for one operation, with credentials scoped to it."""
-        credentials = await self._fresh(scopes)
+        """Open the tools for one operation, with a token scoped to it."""
+        token = await self._fresh(scopes)
         workdir = staging.ensure_workdir(self._workdir)
-        async with credential_files(credentials, workdir, self.resource) as files:
+        async with credential_files(token, workdir) as files:
             yield CondorSession(self._run, files, self._pool, self._name)
 
-    async def _fresh(self, scopes: frozenset[str]) -> CredentialSet:
+    async def _fresh(self, scopes: frozenset[str]) -> BearerToken:
         requirements = credential_requirements(self._settings, scopes)
         assert requirements is not None  # an HTCondor-CE always asks for a token
         fresh = await refresh_if_stale(
-            self._credentials.get(scopes), requirements, self._provider
+            self._tokens.get(scopes), requirements, self._provider
         )
-        self._credentials[scopes] = fresh
+        assert isinstance(fresh, BearerToken)  # refresh_if_stale checked the kind
+        self._tokens[scopes] = fresh
         return fresh
 
     async def _ads(
