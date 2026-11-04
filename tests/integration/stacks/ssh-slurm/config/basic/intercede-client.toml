@@ -18,3 +18,9 @@ user = "dirac"
 [credentials]
 type = "ssh-key"                # an ed25519 key authorized for `dirac`
 path = "credentials/ssh-slurm/" # holds `id_ed25519` and `known_hosts`, created at every container start
+
+[refusals]
+# What this backend cannot honour; the shared suite checks it is refused at submit.
+containers = true  # no container_launcher configured above
+url_inputs = true  # a batch system has no data mover of its own
+url_outputs = true
