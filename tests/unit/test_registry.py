@@ -179,7 +179,7 @@ class TestRefused:
 class TestAvailable:
     def test_shipped_today(self):
         assert registry.available() == {
-            "backend": ("htcondor-ce",),
+            "backend": ("batch", "htcondor-ce"),
             "transport": ("local", "ssh"),
             "scheduler": ("slurm",),
         }

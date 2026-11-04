@@ -44,6 +44,7 @@ __all__ = ["available", "get_backend"]
 # backend: it is built from one transport and one scheduler, so combinations
 # never need classes of their own.
 _BACKENDS: dict[str, str] = {
+    "batch": "intercede._backends.batch.backend:BatchBackend",
     "fake": "intercede._backends.fake:FakeBackend",  # internal, for the test suites
     "htcondor-ce": "intercede._backends.monolith.htcondorce:HTCondorCEBackend",
 }
