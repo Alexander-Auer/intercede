@@ -16,11 +16,14 @@ from pathlib import Path
 from typing import Any, TypeVar
 from urllib.parse import urlsplit
 
+import asyncssh
 import pytest
 
 from intercede import registry
-from intercede.auth.models import BearerToken, Credential
+from intercede._backends.batch.protocols import Transport
+from intercede.auth.models import BearerToken, Credential, SSHPrivateKey
 from intercede.auth.providers import StaticCredentials
+from intercede.config import validate_config
 from intercede.protocols import JobBackend, Killable, OutputRetriever, Purgeable
 from tests.integration.generate_matrix import STACKS_DIR, compose_env, load_manifest
 
@@ -80,9 +83,12 @@ def stack_dir(stack: dict[str, Any]) -> Path:
 
 @pytest.fixture(scope="session")
 def client_config(
-    request: pytest.FixtureRequest, stack: dict[str, Any]
+    request: pytest.FixtureRequest, stack: dict[str, Any], stack_dir: Path
 ) -> dict[str, Any]:
-    """Load stacks/<id>/config/<config>/intercede-client.toml."""
+    """Load stacks/<id>/config/<config>/intercede-client.toml.
+
+    The host key an SSH stack creates when it starts is added to its [backend].
+    """
     config_name = request.config.getoption("--config")
     path = STACKS_DIR / stack["id"] / "config" / config_name / "intercede-client.toml"
     if not path.is_file():
@@ -92,7 +98,13 @@ def client_config(
             pytest.fail(msg)
         pytest.skip(msg)
     with path.open("rb") as f:
-        return tomllib.load(f)
+        config = tomllib.load(f)
+    if config.get("credentials", {}).get("type") == "ssh-key":
+        known_hosts = stack_dir / config["credentials"]["path"] / "known_hosts"
+        if not known_hosts.is_file():
+            pytest.fail(f"{known_hosts} is missing: is the stack up?")
+        config["backend"]["known_hosts"] = known_hosts.read_text()
+    return config
 
 
 # What a stack can declare its backend refuses, in [refusals] of its client config.
@@ -123,10 +135,27 @@ def _tampered_token(credential: Credential) -> Credential:
     return BearerToken(value=value[:-8] + tail)
 
 
+def _ssh_key(folder: Path) -> Credential:
+    return SSHPrivateKey(pem=(folder / "id_ed25519").read_bytes())
+
+
+def _another_ssh_key(credential: Credential) -> Credential:
+    # A good key, but not the one the resource has authorized.
+    return SSHPrivateKey(
+        pem=asyncssh.generate_private_key("ssh-ed25519").export_private_key()
+    )
+
+
 # How each credential type is read from the stack's credentials folder, and
 # turned into one the resource rejects.
-_READERS: dict[str, Callable[[Path], Credential]] = {"token": _token}
-_TAMPERERS: dict[str, Callable[[Credential], Credential]] = {"token": _tampered_token}
+_READERS: dict[str, Callable[[Path], Credential]] = {
+    "token": _token,
+    "ssh-key": _ssh_key,
+}
+_TAMPERERS: dict[str, Callable[[Credential], Credential]] = {
+    "token": _tampered_token,
+    "ssh-key": _another_ssh_key,
+}
 
 
 @pytest.fixture
@@ -179,12 +208,54 @@ def unreachable_config(client_config: dict[str, Any]) -> dict[str, Any]:
 
 
 @pytest.fixture
+def backend_credentials(
+    request: pytest.FixtureRequest, client_config: dict[str, Any]
+) -> StaticCredentials:
+    """Return what a backend is built with: empty on a stack that needs no credentials."""
+    if "credentials" not in client_config:
+        return StaticCredentials()
+    credentials: StaticCredentials = request.getfixturevalue("credentials")
+    return credentials
+
+
+@pytest.fixture
 async def backend(
-    client_config: dict[str, Any], credentials: StaticCredentials
+    client_config: dict[str, Any], backend_credentials: StaticCredentials
 ) -> AsyncIterator[JobBackend]:
     """Yield the backend [backend] describes, built by the registry and open."""
-    async with registry.get_backend(client_config["backend"], credentials) as opened:
+    async with registry.get_backend(
+        client_config["backend"], backend_credentials
+    ) as opened:
         yield opened
+
+
+@pytest.fixture
+async def transport(
+    client_config: dict[str, Any], backend_credentials: StaticCredentials
+) -> AsyncIterator[Transport]:
+    """Yield the transport of a composed backend on its own; for the transport suite."""
+    config: Any = validate_config(client_config["backend"])
+    built = registry._load("transport", config.transport).from_settings(
+        config, backend_credentials
+    )
+    async with built as opened:
+        yield opened
+
+
+@pytest.fixture
+async def remote(transport: Transport) -> AsyncIterator[str]:
+    """Yield an empty directory on the resource; for the transport suite."""
+    made = await transport.run(["mktemp", "-d"], timeout=30)
+    assert made.returncode == 0, made
+    directory = made.stdout.strip()
+    yield directory
+    await transport.run(["rm", "-rf", directory], timeout=30)
+
+
+@pytest.fixture
+def here(tmp_path: Path) -> Path:
+    """Return an empty directory on this host; for the transport suite."""
+    return tmp_path
 
 
 T = TypeVar("T")

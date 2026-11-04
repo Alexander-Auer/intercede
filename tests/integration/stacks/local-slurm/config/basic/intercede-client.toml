@@ -9,3 +9,9 @@ kind = "batch"
 transport = "local"
 scheduler = "slurm"
 # No [credentials]: pytest runs in the container, as the user the jobs run as.
+
+[refusals]
+# What this backend cannot honour; the shared suite checks it is refused at submit.
+containers = true  # no container_launcher configured above
+url_inputs = true  # a batch system has no data mover of its own
+url_outputs = true
