@@ -19,7 +19,7 @@ import asyncio
 import posixpath
 import shlex
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Sequence
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager, contextmanager, suppress
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self, TypeVar
@@ -40,6 +40,9 @@ from intercede.exceptions import (
 # Every command and every copy is a session on the one connection, and
 # OpenSSH's sshd allows 10 of them at once by default (MaxSessions).
 MAX_SESSIONS = 10
+
+# How long a command that is being given up on may take to go away, in seconds.
+KILL_GRACE_S = 2
 
 _Channel = TypeVar("_Channel")
 
@@ -103,8 +106,11 @@ class SSHTransport:
                         shlex.join(argv), stdin=asyncssh.DEVNULL, encoding=None
                     )
                 )
-                async with process:
+                try:
                     completed = await process.wait()
+                except BaseException:  # its timeout, or the caller's cancellation
+                    await _kill(process)
+                    raise
         if completed.returncode is None:  # neither an exit status nor a signal
             raise ResourceUnavailableError(
                 f"the connection to {self._resource} dropped before {argv[0]} finished"
@@ -352,6 +358,22 @@ async def _agent_keys(wanted: bool) -> AsyncGenerator[Sequence[asyncssh.SSHKeyPa
     finally:
         agent.close()
         await agent.wait_closed()
+
+
+async def _kill(process: asyncssh.SSHClientProcess[bytes]) -> None:
+    """Kill a command and end its session, without waiting for the command to end.
+
+    Only closing the session is not enough: sshd keeps it open until the command
+    has ended, and a child that holds the command's output can outlive the kill.
+    The wait is therefore bounded, which frees the session slot here even if
+    such a child keeps its session open on the server for a while.
+    """
+    with suppress(OSError):  # the channel is gone already
+        process.kill()
+    process.close()
+    with suppress(TimeoutError):
+        async with asyncio.timeout(KILL_GRACE_S):
+            await process.wait_closed()
 
 
 async def _close(hops: Sequence[asyncssh.SSHClientConnection]) -> None:

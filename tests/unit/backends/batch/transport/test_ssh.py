@@ -109,6 +109,23 @@ class TestConnection:
         await echo(ssh)  # the next call connects again
         assert [c for c in sshd.commands if "sleep" in c] == ["sleep 5"]
 
+    async def test_a_command_that_outlasts_its_timeout_is_killed(
+        self, ssh: SSHTransport, sshd: SSHD
+    ):
+        with pytest.raises(ResourceUnavailableError, match="did not finish"):
+            await ssh.run(["sleep", "30"], timeout=0.2)
+        await eventually(lambda: sshd.signals == ["KILL"])
+        assert await echo(ssh) == "ok\n"  # the connection and its session slot survive
+
+    async def test_a_cancelled_command_is_killed(self, ssh: SSHTransport, sshd: SSHD):
+        running = asyncio.create_task(ssh.run(["sleep", "30"], timeout=TIMEOUT))
+        await sshd.started.wait()
+        await asyncio.sleep(0.1)  # the client hears a moment later that it started
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        await eventually(lambda: sshd.signals == ["KILL"])
+
     async def test_closing_disconnects(self, sshd: SSHD):
         async with transport(sshd.config(), sshd.key()) as ssh:
             await echo(ssh)
