@@ -100,9 +100,7 @@ class SSHTransport:
             async with asyncio.timeout(timeout), self._sessions:
                 process = await self._open(
                     lambda connection: connection.create_process(
-                        shlex.join(argv),
-                        stdin=asyncssh.DEVNULL,
-                        encoding=None
+                        shlex.join(argv), stdin=asyncssh.DEVNULL, encoding=None
                     )
                 )
                 async with process:
