@@ -191,6 +191,9 @@ class CloudConfig(_Config):
 # -- a batch system reached through a transport --------------------------------
 
 
+_JUMP_HOST = re.compile(rf"(?:[^@:\s]+@)?{_HOST_PORT.pattern}")
+
+
 class _BatchConfig(_QueueConfig):
     kind: Literal["batch"]
     """Selects a batch system; ``transport`` then selects the model."""
@@ -228,7 +231,9 @@ class BatchSSHConfig(_BatchConfig):
     """How to log in: a key or a password from the credential provider, or an SSH agent."""
 
     jump_host: str | None = None
-    """A host to connect through, as ``"[user@]host[:port]"``."""
+    """A host to connect through, as ``"[user@]host[:port]"``. It is logged in
+    to with the same credentials, and its key must be in ``known_hosts`` too;
+    the user defaults to ``user``."""
 
     connect_timeout_s: PositiveInt = 30
     """How long connecting may take, in seconds."""
@@ -237,6 +242,14 @@ class BatchSSHConfig(_BatchConfig):
     def _known_hosts_not_empty(self) -> Self:
         if not self.known_hosts.strip():
             raise ValueError("known_hosts must hold the expected host keys")
+        return self
+
+    @model_validator(mode="after")
+    def _jump_host_form(self) -> Self:
+        if self.jump_host is not None and not _JUMP_HOST.fullmatch(self.jump_host):
+            raise ValueError(
+                "jump_host must be '[user@]host[:port]', e.g. 'dirac@gw.example.org:2222'"
+            )
         return self
 
 

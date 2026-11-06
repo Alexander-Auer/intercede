@@ -39,4 +39,4 @@ repos:
     hooks:
       - id: mypy
         exclude: tests
-        additional_dependencies: ["pydantic>=2.0.0"]
+        additional_dependencies: ["pydantic>=2.0.0", "asyncssh>=2.24"]
