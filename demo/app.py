@@ -21,6 +21,7 @@ from demo.board import Board
 from demo.columns import Columns, compose_file, stacks
 from demo.events import Bus
 from demo.payloads import PAYLOADS
+from demo.recording import Player, Recorder, recordings
 from demo.scenarios import SCENARIOS, Scenarios
 from demo.tracing import Tracer
 from intercede import JobStatus
@@ -42,6 +43,8 @@ class State:
         self.board = Board(self.columns, RUNTIME)
         self.scenarios = Scenarios(self.board)
         self.mode = "live"
+        self.recorder = Recorder(self.bus)
+        self.player = Player(self.bus)
         self.tasks: list[asyncio.Task[None]] = []
 
     def hello(self) -> dict[str, Any]:
@@ -51,8 +54,19 @@ class State:
             "columns": self.columns.snapshot(),
             "operations": [op.as_event() for op in self.tracer.operations],
             "last": dict(self.scenarios.last),
+            "recording": self.recorder.on,
             **self.board.snapshot(),
         }
+
+    def opening(self) -> list[dict[str, Any]]:
+        """What a browser that connects now gets first: the live state, or the replay so far."""
+        if self.player.active:
+            return [
+                *self.player.played,
+                {"type": "mode", "mode": "replay"},
+                self.player.status(),
+            ]
+        return [self.bus.redactor.scrub(self.hello())]
 
 
 async def _refresh_forever(state: State) -> None:
@@ -100,7 +114,8 @@ async def events() -> StreamingResponse:
     async def stream() -> AsyncIterator[str]:
         queue = state.bus.listen()
         try:
-            yield _sse(state.bus.redactor.scrub(state.hello()))
+            for event in state.opening():
+                yield _sse(event)
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), HEARTBEAT_S)
@@ -168,6 +183,7 @@ class SubmitRequest(BaseModel):
 
 @app.post("/api/submit")
 async def submit(request: SubmitRequest) -> dict[str, str]:
+    _live_only(_state())
     state = _state()
     if request.payload not in PAYLOADS or not 1 <= request.copies <= 50:
         raise HTTPException(400, "unknown payload, or copies not between 1 and 50")
@@ -184,6 +200,7 @@ class ActionRequest(BaseModel):
 
 @app.post("/api/action")
 async def action(request: ActionRequest) -> dict[str, Any]:
+    _live_only(_state())
     if request.operation not in ("kill", "purge", "get_output", "get_diagnostics"):
         raise HTTPException(400, "unknown operation")
     return await _state().board.act(request.operation, request.keys)
@@ -191,6 +208,7 @@ async def action(request: ActionRequest) -> dict[str, Any]:
 
 @app.post("/api/reset")
 async def reset() -> dict[str, str]:
+    _live_only(_state())
     state = _state()
     state.scenarios.last.clear()
     await state.board.reset()
@@ -203,6 +221,7 @@ class ColumnRequest(BaseModel):
 
 @app.post("/api/restart")
 async def restart(request: ColumnRequest) -> dict[str, Any]:
+    _live_only(_state())
     state = _state()
     if request.column not in state.columns.columns:
         raise HTTPException(400, "unknown column")
@@ -215,6 +234,7 @@ class KeyRequest(BaseModel):
 
 @app.post("/api/forge")
 async def forge(request: KeyRequest) -> dict[str, Any]:
+    _live_only(_state())
     state = _state()
     job = state.board.jobs.get(request.key)
     if job is None or job.handle is None:
@@ -229,6 +249,7 @@ class ScenarioRequest(BaseModel):
 
 @app.post("/api/scenario")
 async def scenario(request: ScenarioRequest) -> dict[str, str]:
+    _live_only(_state())
     state = _state()
     if request.name not in SCENARIOS or request.column not in state.columns.columns:
         raise HTTPException(400, "unknown scenario or column")
@@ -246,6 +267,7 @@ class StackRequest(BaseModel):
 @app.post("/api/stack")
 async def stack(request: StackRequest) -> dict[str, str]:
     """Start or stop a stack, as docs/dev/how-to/run-integration-tests-locally.md does."""
+    _live_only(_state())
     state = _state()
     if request.stack not in stacks() or request.action not in ("up", "down"):
         raise HTTPException(400, "unknown stack or action")
@@ -293,8 +315,71 @@ async def mode(request: ModeRequest) -> dict[str, str]:
         raise HTTPException(400, "unknown mode")
     state = _state()
     state.mode = request.mode
-    state.bus.publish({"type": "mode", "mode": state.mode})
+    if request.mode != "replay" and (state.player.active or not state.bus.live):
+        # Back to the live state: every browser is sent all of it again.
+        state.player.stop()
+        state.bus.live = True
+        state.bus.publish(state.hello())
+    state.bus.publish(
+        {"type": "mode", "mode": state.mode}, replayed=state.player.active
+    )
     return {"mode": state.mode}
+
+
+class RecordRequest(BaseModel):
+    on: bool
+
+
+@app.post("/api/record")
+async def record(request: RecordRequest) -> dict[str, Any]:
+    state = _state()
+    _live_only(state)
+    saved = None
+    if request.on and not state.recorder.on:
+        state.recorder.start(state.hello())
+    elif not request.on and state.recorder.on:
+        saved = state.recorder.stop().name
+    state.bus.publish({"type": "recording", "on": state.recorder.on, "saved": saved})
+    return {"on": state.recorder.on, "saved": saved}
+
+
+@app.get("/api/recordings")
+async def list_recordings() -> list[dict[str, Any]]:
+    return recordings()
+
+
+class ReplayRequest(BaseModel):
+    action: str
+    name: str | None = None
+    speed: float | None = None
+
+
+@app.post("/api/replay")
+async def replay(request: ReplayRequest) -> dict[str, Any]:
+    state = _state()
+    player = state.player
+    if request.action == "play" and request.name:
+        if state.recorder.on:
+            raise HTTPException(409, "stop recording first")
+        state.mode = "replay"
+        player.play(request.name)
+    elif request.action == "pause":
+        player.paused = True
+    elif request.action == "resume":
+        player.paused = False
+    elif request.action == "speed" and request.speed:
+        player.speed = max(0.25, min(request.speed, 16.0))
+    else:
+        raise HTTPException(400, "unknown replay action")
+    status = player.status()
+    state.bus.publish(status, replayed=True)
+    return status
+
+
+def _live_only(state: State) -> None:
+    """Refuse what would act on a live backend while a recording plays."""
+    if state.player.active:
+        raise HTTPException(409, "a recording is playing: switch to Live or Fake first")
 
 
 @app.get("/api/file")

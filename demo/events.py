@@ -60,15 +60,23 @@ class Bus:
         self.redactor = Redactor()
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._taps: list[Callable[[dict[str, Any]], None]] = []
+        # False while a recording plays: live events then reach no browser.
+        self.live = True
 
-    def publish(self, event: dict[str, Any]) -> None:
-        """Redact ``event`` and send it to every subscriber and tap."""
+    def publish(self, event: dict[str, Any], *, replayed: bool = False) -> None:
+        """Redact ``event`` and send it to every subscriber and tap.
+
+        A replayed event reaches the browsers only; a live one reaches them
+        only while no recording plays, and the taps (the recorder) always.
+        """
         clean = self.redactor.scrub(event)
         clean.setdefault("t", time.time())
-        for queue in self._subscribers:
-            queue.put_nowait(clean)
-        for tap in self._taps:
-            tap(clean)
+        if self.live or replayed:
+            for queue in self._subscribers:
+                queue.put_nowait(clean)
+        if not replayed:
+            for tap in self._taps:
+                tap(clean)
 
     def tap(self, callback: Callable[[dict[str, Any]], None]) -> Callable[[], None]:
         """Call ``callback`` with every redacted event; return what removes it."""

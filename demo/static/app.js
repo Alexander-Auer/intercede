@@ -43,6 +43,9 @@ export const store = {
   scenario: null,
   meta: null,
   replaying: false,
+  replay: null,
+  recording: false,
+  recordings: [],
   connected: false,
 };
 
@@ -53,9 +56,14 @@ export function onEvent(fn) {
 }
 
 function apply(event) {
+  if (event.replayed) store.replaying = true;
   switch (event.type) {
     case "hello":
-      store.mode = event.mode;
+      if (!event.replayed) {
+        store.replaying = false;
+        store.mode = event.mode;
+        store.recording = event.recording;
+      }
       store.columns = event.columns;
       store.jobs = event.jobs;
       store.database = event.database;
@@ -99,6 +107,15 @@ function apply(event) {
       break;
     case "mode":
       store.mode = event.mode;
+      if (event.mode === "replay") loadRecordings();
+      break;
+    case "replay":
+      store.replay = event;
+      store.replaying = Boolean(event.name);
+      break;
+    case "recording":
+      store.recording = event.on;
+      if (event.saved) toast(`Saved demo/recordings/${event.saved}`, "info");
       break;
     case "reset":
       store.ops.clear();
@@ -207,6 +224,11 @@ function drawChrome() {
   for (const button of document.querySelectorAll(".mode button")) {
     button.classList.toggle("active", button.dataset.mode === store.mode);
   }
+  const record = document.getElementById("record");
+  record.classList.toggle("on", store.recording);
+  record.textContent = store.recording ? "● Recording… stop" : "● Record";
+  record.disabled = store.replaying;
+  drawReplayBar();
 }
 
 document.getElementById("scene-nav").addEventListener("click", (e) => {
@@ -224,6 +246,42 @@ document.addEventListener("keydown", (e) => {
 document.querySelector(".mode").addEventListener("click", async (e) => {
   const mode = e.target.closest("[data-mode]")?.dataset.mode;
   if (mode) await api("/api/mode", { mode }).catch((err) => toast(err.message));
+});
+
+async function loadRecordings() {
+  store.recordings = await api("/api/recordings").catch(() => []);
+  schedule();
+}
+
+function drawReplayBar() {
+  const bar = document.getElementById("replay-bar");
+  bar.hidden = store.mode !== "replay";
+  if (bar.hidden) return;
+  const r = store.replay;
+  const playing = r?.name && !r.done;
+  const options = store.recordings.map((x) => `<option value="${escape(x.name)}" ${x.name === r?.name ? "selected" : ""}>${escape(x.name)} · ${Math.round(x.duration_s)} s</option>`).join("");
+  const html = `${badge("REPLAY")}
+    <select id="replay-pick">${options || "<option value=''>no recordings in demo/recordings/</option>"}</select>
+    <button class="ghost" data-replay="play">▶ Play</button>
+    <button class="ghost" data-replay="${r?.paused ? "resume" : "pause"}" ${playing ? "" : "disabled"}>${r?.paused ? "Resume" : "Pause"}</button>
+    <span class="speeds">${[0.5, 1, 2, 4, 8].map((x) => `<button class="ghost ${r?.speed === x ? "on" : ""}" data-speed="${x}">${x}×</button>`).join("")}</span>
+    <span class="mono">${r?.name ? `${Math.round(r.position)} / ${Math.round(r.duration)} s${r.done ? " · finished" : ""}` : "choose a recording"}</span>`;
+  if (bar.dataset.html !== html) { bar.innerHTML = html; bar.dataset.html = html; }
+}
+
+document.getElementById("replay-bar").addEventListener("click", async (e) => {
+  const action = e.target.closest("[data-replay]")?.dataset.replay;
+  const speed = e.target.closest("[data-speed]")?.dataset.speed;
+  const name = document.getElementById("replay-pick")?.value;
+  try {
+    if (action === "play" && name) await api("/api/replay", { action: "play", name });
+    else if (action) await api("/api/replay", { action });
+    else if (speed) await api("/api/replay", { action: "speed", speed: Number(speed) });
+  } catch (err) { toast(err.message); }
+});
+
+document.getElementById("record").addEventListener("click", async () => {
+  await api("/api/record", { on: !store.recording }).catch((err) => toast(err.message));
 });
 
 document.getElementById("reset").addEventListener("click", async () => {

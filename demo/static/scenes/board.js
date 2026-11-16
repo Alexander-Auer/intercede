@@ -115,7 +115,8 @@ export default {
     el.querySelector("#selected-count").textContent = selectable.length
       ? `${selectable.length} selected`
       : "Click tiles to select (shift for more, double-click a column for all)";
-    for (const button of el.querySelectorAll("#actions [data-op]")) button.disabled = !selectable.length;
+    for (const button of el.querySelectorAll("#actions [data-op]")) button.disabled = !selectable.length || ctx.store.replaying;
+    el.querySelector("#submit").disabled = ctx.store.replaying;
   },
 };
 

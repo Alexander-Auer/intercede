@@ -54,8 +54,8 @@
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body {
-  display: grid;
-  grid-template-rows: auto 1fr auto;
+  display: flex;
+  flex-direction: column;
   background: var(--bg);
   color: var(--ink);
   font: 20px/1.4 var(--sans);
@@ -81,7 +81,7 @@ a { color: var(--accent); }
 .scene-title h1 { margin: 0; font-size: 30px; line-height: 1.15; }
 .scene-title p { margin: 2px 0 0; color: var(--ink-2); font-size: 20px; }
 
-#stage { overflow: auto; padding: 22px 28px; min-height: 0; }
+#stage { flex: 1; overflow: auto; padding: 22px 28px; min-height: 0; }
 
 .bar {
   display: flex;
@@ -318,3 +318,15 @@ table.heat th.axis { text-align: right; padding-right: 12px; font-size: 17px; wh
 .heat-cell[data-status="Done"] { background: var(--st-done); border: 0; }
 .heat-cell[data-status="Failed"] { background: var(--st-failed); border: 0; }
 .heat-cell[data-status="Aborted"] { background: var(--st-aborted); border: 0; }
+
+/* -- replay ------------------------------------------------------------------------- */
+
+.replay-bar {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  padding: 8px 28px; background: color-mix(in srgb, var(--b-replay) 14%, var(--panel));
+  border-bottom: 2px solid var(--b-replay); font-size: 16px;
+}
+.replay-bar[hidden] { display: none; }
+.replay-bar select { font-size: 16px; padding: 3px 8px; border-radius: 6px; }
+.replay-bar .speeds button { padding: 3px 9px; }
+.replay-bar .speeds button.on { background: var(--b-replay); color: #fff; border-color: var(--b-replay); }
