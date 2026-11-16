@@ -88,3 +88,6 @@ site/
 .pixi
 pixi.lock
 *.egg-info
+
+# The presentation app's payload scripts and collected output
+demo/.runtime/

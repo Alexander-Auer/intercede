@@ -8,6 +8,9 @@ source = "vcs"
 [tool.hatch.build.targets.wheel]
 packages = ["src/intercede"]
 
+[tool.hatch.build.targets.sdist]
+exclude = ["demo"] # the presentation app; see demo/README.md
+
 [project]
 name = "intercede"
 description = "Unified interfaces to Computing Elements and batch systems for DIRAC / DiracX"
@@ -145,6 +148,8 @@ py312 = { features = ["testing", "py312"] }
 py313 = { features = ["testing", "py313"] }
 py314 = { features = ["testing", "py314"] }
 docs = { features = ["docs"], solve-group = "default" }
+# The presentation app in demo/; not part of the package (see demo/README.md).
+demo = { features = ["testing", "py313", "demo"] }
 
 [tool.pixi.feature.testing.dependencies]
 # The HTCondor tools (condor_submit, condor_q, ...) the htcondor-ce backend runs;
@@ -171,6 +176,14 @@ mkdocstrings = { version = "*", extras = ["python"] }
 griffe-pydantic = "*"
 [tool.pixi.feature.docs.tasks]
 docs = { cmd = "mkdocs build --strict", description = "Build the documentation" }
+
+[tool.pixi.feature.demo.dependencies]
+fastapi = "*"
+uvicorn = "*"
+
+[tool.pixi.feature.demo.tasks]
+demo = { cmd = "python -m demo", description = "Start the presentation app (demo/README.md)" }
+demo-test = { cmd = "python -m pytest demo/tests", description = "Run the presentation app's own tests" }
 
 
 [tool.pixi.tasks]

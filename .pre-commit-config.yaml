@@ -38,5 +38,5 @@ repos:
     rev: v1.19.1
     hooks:
       - id: mypy
-        exclude: tests
+        exclude: tests|^demo/ # demo/: the presentation app, not part of the package
         additional_dependencies: ["pydantic>=2.0.0", "asyncssh>=2.24"]
