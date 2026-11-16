@@ -2,6 +2,7 @@
 // Every view is drawn from the store, so a replayed recording draws exactly as live.
 
 import board from "./scenes/board.js";
+import trace from "./scenes/trace.js";
 
 const placeholder = (title, caption) => ({
   title,
@@ -16,7 +17,7 @@ export const SCENES = [
   placeholder("Composition", "Every filled cell is a working backend without a class of its own."),
   placeholder("Translation", "One specification, many dialects."),
   board,
-  placeholder("Trace", "What happens underneath one call."),
+  trace,
   placeholder("Lifecycle", "interCEde keeps no state: the consumer keeps the handle."),
   placeholder("Partial failure", "At grid scale, partial failure is normal; the contract reports it per job."),
   placeholder("Verified", "Tested against the real thing, in CI."),

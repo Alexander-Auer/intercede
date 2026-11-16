@@ -216,3 +216,20 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 .outcome .ok.no { color: var(--st-failed); }
 .outcome .files a { margin-right: 10px; }
 .viewer { margin-top: 8px; max-height: 300px; overflow: auto; }
+
+/* -- sequence diagrams ------------------------------------------------------------ */
+
+.sequence { display: block; max-width: 100%; height: auto; font-family: var(--mono); }
+.sequence .lane { font: 700 19px var(--sans); text-anchor: middle; fill: var(--ink); }
+.sequence .lifeline { stroke: var(--line); stroke-width: 2; stroke-dasharray: 4 4; }
+.sequence .arrow { stroke: var(--accent); stroke-width: 2; }
+.sequence .arrow.back { stroke: var(--ink-2); stroke-dasharray: 6 4; }
+.sequence .arrow.error { stroke: var(--st-failed); }
+.sequence .head { fill: var(--ink-2); }
+.sequence .label { font-size: 16px; fill: var(--ink); }
+.sequence .label.error { fill: var(--st-failed); }
+.sequence .ms { font-size: 14px; text-anchor: end; fill: var(--ink-2); }
+.sequence .dot { fill: var(--accent); }
+.sequence .hit { fill: transparent; }
+.sequence .clickable { cursor: pointer; }
+.sequence .clickable:hover .hit { fill: color-mix(in srgb, var(--focus) 18%, transparent); }
