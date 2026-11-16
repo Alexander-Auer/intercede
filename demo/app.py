@@ -21,6 +21,7 @@ from demo.board import Board
 from demo.columns import Columns, compose_file, stacks
 from demo.events import Bus
 from demo.payloads import PAYLOADS
+from demo.scenarios import SCENARIOS, Scenarios
 from demo.tracing import Tracer
 from intercede import JobStatus
 
@@ -39,6 +40,7 @@ class State:
         self.tracer = Tracer(self.bus)
         self.columns = Columns(self.tracer)
         self.board = Board(self.columns, RUNTIME)
+        self.scenarios = Scenarios(self.board)
         self.mode = "live"
         self.tasks: list[asyncio.Task[None]] = []
 
@@ -48,6 +50,7 @@ class State:
             "mode": self.mode,
             "columns": self.columns.snapshot(),
             "operations": [op.as_event() for op in self.tracer.operations],
+            "last": dict(self.scenarios.last),
             **self.board.snapshot(),
         }
 
@@ -123,6 +126,10 @@ async def meta() -> dict[str, Any]:
         ],
         "statuses": [status.value for status in JobStatus],
         "consumer": {"path": "demo/consumer.py", "source": inspect.getsource(consumer)},
+        "scenarios": [
+            {"name": name, "title": title, "needs": needs}
+            for name, (title, needs) in SCENARIOS.items()
+        ],
     }
 
 
@@ -157,8 +164,51 @@ async def action(request: ActionRequest) -> dict[str, Any]:
 
 @app.post("/api/reset")
 async def reset() -> dict[str, str]:
-    await _state().board.reset()
+    state = _state()
+    state.scenarios.last.clear()
+    await state.board.reset()
     return {"status": "reset"}
+
+
+class ColumnRequest(BaseModel):
+    column: str
+
+
+@app.post("/api/restart")
+async def restart(request: ColumnRequest) -> dict[str, Any]:
+    state = _state()
+    if request.column not in state.columns.columns:
+        raise HTTPException(400, "unknown column")
+    return await state.scenarios.restart(request.column)
+
+
+class KeyRequest(BaseModel):
+    key: str
+
+
+@app.post("/api/forge")
+async def forge(request: KeyRequest) -> dict[str, Any]:
+    state = _state()
+    job = state.board.jobs.get(request.key)
+    if job is None or job.handle is None:
+        raise HTTPException(400, "choose a submitted job first")
+    return await state.scenarios.forge(request.key)
+
+
+class ScenarioRequest(BaseModel):
+    name: str
+    column: str
+
+
+@app.post("/api/scenario")
+async def scenario(request: ScenarioRequest) -> dict[str, str]:
+    state = _state()
+    if request.name not in SCENARIOS or request.column not in state.columns.columns:
+        raise HTTPException(400, "unknown scenario or column")
+    if state.scenarios.running:
+        raise HTTPException(409, "a scenario is already running")
+    asyncio.create_task(state.scenarios.run(request.name, request.column))
+    return {"status": "started"}
 
 
 class StackRequest(BaseModel):

@@ -233,3 +233,27 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 .sequence .hit { fill: transparent; }
 .sequence .clickable { cursor: pointer; }
 .sequence .clickable:hover .hit { fill: color-mix(in srgb, var(--focus) 18%, transparent); }
+
+/* -- the JobStatus state machine ------------------------------------------------- */
+
+.machine { width: 100%; height: auto; }
+.machine .group { fill: var(--panel-2); stroke: var(--line); }
+.machine .group-label { font: 600 15px var(--sans); fill: var(--ink-2); }
+.machine .edge { stroke: var(--line); stroke-width: 3; }
+.machine .edge.op { stroke-dasharray: 7 5; }
+.machine .edge.lit { stroke: var(--focus); stroke-width: 4; }
+.machine marker path { fill: var(--ink-2); }
+.machine .edge-label { font: 14px var(--mono); fill: var(--ink-2); text-anchor: middle; }
+.machine .state rect { fill: var(--panel); stroke: var(--line); stroke-width: 2; }
+.machine .state text { font: 700 17px var(--sans); text-anchor: middle; fill: var(--ink); }
+.machine .state.visited rect { stroke: var(--focus); stroke-width: 3; }
+.machine .state.now rect { stroke-width: 4; }
+.machine .state.now text { fill: #fff; }
+.machine .state.now[data-status="Submitted"] rect { fill: var(--st-submitted); }
+.machine .state.now[data-status="Waiting"] rect { fill: var(--st-waiting); }
+.machine .state.now[data-status="Running"] rect { fill: var(--st-running); }
+.machine .state.now[data-status="Done"] rect { fill: var(--st-done); }
+.machine .state.now[data-status="Failed"] rect { fill: var(--st-failed); }
+.machine .state.now[data-status="Aborted"] rect { fill: var(--st-aborted); }
+.machine .state.now[data-status="Unknown"] rect { fill: var(--st-unknown); }
+.machine .step-no { font: 700 13px var(--sans); fill: var(--focus); text-anchor: middle; }

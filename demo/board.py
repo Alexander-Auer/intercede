@@ -45,6 +45,11 @@ class Job:
     purged: bool = False
     history: list[tuple[float, str]] = field(default_factory=list)
 
+    @property
+    def id_(self) -> str:
+        """The job's ID at its resource, or the copy it was for when refused."""
+        return self.handle.id if self.handle else f"copy {self.copy}"
+
     def set_status(self, status: str) -> bool:
         if status == self.status:
             return False
@@ -100,7 +105,8 @@ class Board:
 
     async def submit(
         self, column_ids: list[str], payload_name: str, count: int
-    ) -> None:
+    ) -> dict[str, Any]:
+        """Submit to every online column at once; return each one's Submission or error."""
         payload = PAYLOADS[payload_name]
         spec = specification(payload, self.scripts[payload_name])
         targets = [
@@ -108,13 +114,14 @@ class Board:
             for c in column_ids
             if self.columns.columns[c].state == "online"
         ]
-        await asyncio.gather(
+        results = await asyncio.gather(
             *(self._submit(column, payload, spec, count) for column in targets)
         )
+        return {column.id: result for column, result in zip(targets, results)}
 
     async def _submit(
         self, column: Column, payload: Payload, spec: Any, count: int
-    ) -> None:
+    ) -> Any:
         per_copy = copies(count)
         try:
             submission = await consumer.submit(
@@ -122,7 +129,7 @@ class Board:
             )
         except InterCEdeError as exc:
             self.alert(column.id, f"submit raised {type(exc).__name__}: {exc}")
-            return
+            return exc
         for index, handle in submission.handles.items():
             job = Job(
                 handle.key,
@@ -142,6 +149,7 @@ class Board:
                 key, column.id, payload.name, index, REFUSED, reason=reason
             )
         self.publish()
+        return submission
 
     # -- the Fake: a resource on a timer --------------------------------------
 

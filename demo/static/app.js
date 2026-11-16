@@ -3,6 +3,8 @@
 
 import board from "./scenes/board.js";
 import trace from "./scenes/trace.js";
+import lifecycle from "./scenes/lifecycle.js";
+import failure from "./scenes/failure.js";
 
 const placeholder = (title, caption) => ({
   title,
@@ -18,8 +20,8 @@ export const SCENES = [
   placeholder("Translation", "One specification, many dialects."),
   board,
   trace,
-  placeholder("Lifecycle", "interCEde keeps no state: the consumer keeps the handle."),
-  placeholder("Partial failure", "At grid scale, partial failure is normal; the contract reports it per job."),
+  lifecycle,
+  failure,
   placeholder("Verified", "Tested against the real thing, in CI."),
 ];
 
@@ -32,6 +34,9 @@ export const store = {
   database: {},
   ops: new Map(),
   outcomes: null,
+  restart: null,
+  forged: null,
+  scenario: null,
   meta: null,
   replaying: false,
   connected: false,
@@ -51,6 +56,9 @@ function apply(event) {
       store.jobs = event.jobs;
       store.database = event.database;
       store.ops = new Map(event.operations.map((op) => [op.id, op]));
+      store.restart = event.last.restart ?? null;
+      store.forged = event.last.forged ?? null;
+      store.scenario = event.last.scenario ?? null;
       break;
     case "columns":
       store.columns = event.columns;
@@ -76,12 +84,21 @@ function apply(event) {
     case "outcomes":
       store.outcomes = event;
       break;
+    case "restart":
+      store.restart = event;
+      break;
+    case "forged":
+      store.forged = event;
+      break;
+    case "scenario":
+      store.scenario = event;
+      break;
     case "mode":
       store.mode = event.mode;
       break;
     case "reset":
       store.ops.clear();
-      store.outcomes = null;
+      store.outcomes = store.restart = store.forged = store.scenario = null;
       break;
     case "alert":
       toast(`${event.column}: ${event.message}`, event.level);
