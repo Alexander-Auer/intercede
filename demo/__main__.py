@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+import sys
 from pathlib import Path
 
-import uvicorn
+try:
+    import uvicorn
+except ImportError:  # run with a Python that is not the demo's environment
+    sys.exit(
+        "The presentation app runs in its own pixi environment. Start it with:\n"
+        "  pixi run demo         (add --up to start the stacks first)"
+    )
 
 
 def main() -> None:

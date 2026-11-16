@@ -7,9 +7,9 @@ the wheel, and nothing in CI runs it.
 ## Start
 
 ```sh
-pixi run demo                          # http://127.0.0.1:8470
-pixi run -e demo python -m demo --up   # start every stack first, then the app
-pixi run -e demo python -m demo --down # stop every stack
+pixi run demo          # http://127.0.0.1:8470
+pixi run demo --up     # start every stack first, then the app
+pixi run demo --down   # stop every stack
 ```
 
 The app works fully offline: no CDN, no fonts to download, no JavaScript library at all. Without
