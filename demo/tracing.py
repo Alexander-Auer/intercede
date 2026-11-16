@@ -98,6 +98,11 @@ _current: contextvars.ContextVar[Operation | None] = contextvars.ContextVar(
 )
 
 
+def current_operation() -> Operation | None:
+    """The contract call running in this task, if any."""
+    return _current.get()
+
+
 class Tracer:
     """Publishes operations and their steps, and keeps the latest for new viewers."""
 
@@ -134,6 +139,14 @@ class Tracer:
                 "outcome": operation.outcome,
             }
         )
+
+    def attach(self, operation: Operation | None, step: dict[str, Any]) -> None:
+        """Add a step traced elsewhere (by the agent in a container) to ``operation``."""
+        if operation is None:
+            return
+        step = self.bus.redactor.scrub(step)
+        operation.steps.append(step)
+        self.bus.publish({"type": "op.step", "id": operation.id, "step": step})
 
     def step(
         self, lane: str, call: str, started: float, detail: dict[str, Any]

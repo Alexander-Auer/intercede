@@ -24,6 +24,7 @@ from typing import Any
 from tests.integration.conftest import _READERS
 from tests.integration.generate_matrix import STACKS_DIR, compose_env, load_manifest
 
+from demo.agent import AgentBackend
 from demo.tracing import (
     Tracer,
     TracingProvider,
@@ -122,6 +123,24 @@ def credential(stack_id: str, config: dict[str, Any]) -> Any:
     return _READERS[section["type"]](compose_file(stack_id).parent / section["path"])
 
 
+async def container_running(compose: Path) -> bool:
+    """Tell whether a stack's ``backend`` service is running."""
+    process = await asyncio.create_subprocess_exec(
+        "docker",
+        "compose",
+        "-f",
+        str(compose),
+        "ps",
+        "--status",
+        "running",
+        "--services",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    out, _ = await process.communicate()
+    return "backend" in out.decode().split()
+
+
 async def reachable(host: str, port: int) -> bool:
     try:
         _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), 1)
@@ -143,6 +162,9 @@ class Columns:
             ),
             "ssh-slurm": Column(
                 "ssh-slurm", "SSH + Slurm", "batch", "LIVE", stack="ssh-slurm"
+            ),
+            "local-slurm": Column(
+                "local-slurm", "local + Slurm", "batch", "LIVE", stack="local-slurm"
             ),
         }
 
@@ -231,6 +253,10 @@ class Columns:
         self, column: Column, exits: AsyncExitStack, keep_fake: bool
     ) -> Any:
         assert column.stack is not None
+        if stacks()[column.stack].get("exec_in_container"):
+            # Its local transport must run where Slurm is: in the container (demo/agent.py).
+            agent = AgentBackend(compose_file(column.stack), self.tracer)
+            return traced_backend(agent, column.id, column.source, self.tracer)
         config = client_config(column.stack)
         settings = validate_config(config["backend"])
         held = [credential(column.stack, config)] if "credentials" in config else []
@@ -270,6 +296,10 @@ class Columns:
         except FileNotFoundError as exc:
             return f"{Path(exc.filename).name} is missing: the stack is not running"
         backend = config["backend"]
+        if stacks()[column.stack].get("exec_in_container"):
+            if not await container_running(compose_file(column.stack)):
+                return "its container is not running"
+            return None
         if "endpoint" in backend:
             host, _, port = backend["endpoint"].partition(":")
         else:

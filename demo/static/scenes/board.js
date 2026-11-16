@@ -74,6 +74,10 @@ export default {
       else selection.add(key);
       this.update(ctx);
     });
+    el.querySelector("#columns").addEventListener("click", async (e) => {
+      const stack = e.target.closest("[data-start]")?.dataset.start;
+      if (stack) await ctx.api("/api/stack", { stack, action: "up" }).catch((err) => ctx.toast(err.message));
+    });
     el.querySelector("#columns").addEventListener("dblclick", (e) => {
       const column = e.target.closest(".column[data-column]")?.dataset.column;
       if (!column) return;
@@ -157,7 +161,7 @@ function drawColumns(el, ctx) {
       : "offline";
     card.querySelector(".caps").innerHTML = column.state !== "online" ? "" : OPS.map((op) => `<span class="chip ${column.capabilities.includes(op) ? "on" : ""}" title="isinstance(backend, ${op})">${op}</span>`).join("");
     card.querySelector(".offline-note").innerHTML = column.state === "online" ? "" :
-      `${ctx.escape(column.reason)}${column.start ? `<code>${ctx.escape(column.start)}</code>` : ""}`;
+      `${ctx.escape(column.reason)}${column.start ? `<code>${ctx.escape(column.start)}</code><button class="ghost" data-start="${column.stack}" style="margin-top:8px">Start this stack</button>` : ""}`;
     drawTiles(card.querySelector(".tiles"), ctx.store.jobs.filter((j) => j.column === column.id), ctx);
   }
   for (const card of container.querySelectorAll(".column[data-column]")) {

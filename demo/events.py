@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -75,12 +75,11 @@ class Bus:
         self._taps.append(callback)
         return lambda: self._taps.remove(callback)
 
-    async def subscribe(self) -> AsyncIterator[dict[str, Any]]:
-        """Yield every event published from now on."""
+    def listen(self) -> asyncio.Queue[dict[str, Any]]:
+        """Return a queue that receives every event published from now on."""
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._subscribers.add(queue)
-        try:
-            while True:
-                yield await queue.get()
-        finally:
-            self._subscribers.discard(queue)
+        return queue
+
+    def unlisten(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
+        self._subscribers.discard(queue)

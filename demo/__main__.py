@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
+from pathlib import Path
 
 import uvicorn
 
@@ -11,7 +13,23 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m demo", description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8470)
+    parser.add_argument(
+        "--up", action="store_true", help="start every stack first, and wait for it"
+    )
+    parser.add_argument(
+        "--down", action="store_true", help="stop every stack, and do nothing else"
+    )
     args = parser.parse_args()
+    if args.up or args.down:
+        from demo.columns import compose_file, stacks
+
+        files = {compose_file(s) for s in stacks() if compose_file(s).is_file()}
+        for path in sorted(files):
+            action = ["up", "--wait"] if args.up else ["down"]
+            print("$ docker compose -f", path.relative_to(Path.cwd()), *action)
+            subprocess.run(["docker", "compose", "-f", str(path), *action], check=False)  # noqa: S603, S607
+        if args.down:
+            return
     print(f"interCEde presentation on http://{args.host}:{args.port}")
     uvicorn.run("demo.app:app", host=args.host, port=args.port, log_level="warning")
 

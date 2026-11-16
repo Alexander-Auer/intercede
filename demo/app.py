@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from demo import consumer
 from demo.board import Board
-from demo.columns import Columns
+from demo.columns import Columns, compose_file, stacks
 from demo.events import Bus
 from demo.payloads import PAYLOADS
 from demo.tracing import Tracer
@@ -95,20 +95,18 @@ async def events() -> StreamingResponse:
     state = _state()
 
     async def stream() -> AsyncIterator[str]:
-        yield _sse(state.bus.redactor.scrub(state.hello()))
-        source = state.bus.subscribe()
-        pending = asyncio.ensure_future(anext(source))
+        queue = state.bus.listen()
         try:
+            yield _sse(state.bus.redactor.scrub(state.hello()))
             while True:
-                done, _ = await asyncio.wait({pending}, timeout=HEARTBEAT_S)
-                if not done:
+                try:
+                    event = await asyncio.wait_for(queue.get(), HEARTBEAT_S)
+                except TimeoutError:
                     yield ": heartbeat\n\n"
                     continue
-                yield _sse(pending.result())
-                pending = asyncio.ensure_future(anext(source))
+                yield _sse(event)
         finally:
-            pending.cancel()
-            await source.aclose()
+            state.bus.unlisten(queue)
 
     return StreamingResponse(
         stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"}
@@ -161,6 +159,51 @@ async def action(request: ActionRequest) -> dict[str, Any]:
 async def reset() -> dict[str, str]:
     await _state().board.reset()
     return {"status": "reset"}
+
+
+class StackRequest(BaseModel):
+    stack: str
+    action: str = "up"
+
+
+@app.post("/api/stack")
+async def stack(request: StackRequest) -> dict[str, str]:
+    """Start or stop a stack, as docs/dev/how-to/run-integration-tests-locally.md does."""
+    state = _state()
+    if request.stack not in stacks() or request.action not in ("up", "down"):
+        raise HTTPException(400, "unknown stack or action")
+    asyncio.create_task(_compose(state, request.stack, request.action))
+    return {"status": f"{request.action} started"}
+
+
+async def _compose(state: State, stack_id: str, action: str) -> None:
+    argv = ["docker", "compose", "-f", str(compose_file(stack_id)), action]
+    if action == "up":
+        argv.append("--wait")
+    bus = state.bus
+    bus.publish(
+        {
+            "type": "alert",
+            "column": stack_id,
+            "level": "info",
+            "message": f"$ {' '.join(argv[3:])}: running",
+        }
+    )
+    process = await asyncio.create_subprocess_exec(
+        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+    )
+    out, _ = await process.communicate()
+    level = "info" if process.returncode == 0 else "error"
+    tail = out.decode(errors="replace").strip().splitlines()[-1:] or [""]
+    bus.publish(
+        {
+            "type": "alert",
+            "column": stack_id,
+            "level": level,
+            "message": f"{action}: exit {process.returncode} {tail[0]}",
+        }
+    )
+    await state.columns.refresh()
 
 
 class ModeRequest(BaseModel):
