@@ -83,6 +83,12 @@ pixi run -e demo python demo/scripts/fetch_ci.py   # GITHUB_TOKEN only raises th
 It reads the last runs of `integration.yml` on DIRACGrid/intercede and Alexander-Auer/intercede
 from the GitHub REST API, and the jobs CI names `stack / config / version` from `stacks.yml`.
 
+Without a token GitHub allows 60 requests an hour per address, and an institute's address is
+shared by everyone behind it. So a run that has finished is read only once: a refresh costs one
+request per repository and one per new run. If too few are left, the script says when the limit
+resets and leaves the snapshot as it was; `GITHUB_TOKEN=<any GitHub token>` raises the limit to
+5000 an hour.
+
 ## How it is instrumented
 
 Nothing under `src/` is changed or reimplemented. Every status, handle, command line and outcome
