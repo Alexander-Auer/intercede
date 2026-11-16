@@ -298,7 +298,8 @@ document.getElementById("reset").addEventListener("click", async () => {
   await api("/api/reset", {}).catch((err) => toast(err.message));
 });
 
-const theme = localStorage.getItem("theme");
+let theme = new URLSearchParams(location.search).get("theme");
+try { theme ??= localStorage.getItem("theme"); } catch { /* private window */ }
 if (theme) document.documentElement.dataset.theme = theme;
 document.getElementById("theme").addEventListener("click", () => {
   const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
