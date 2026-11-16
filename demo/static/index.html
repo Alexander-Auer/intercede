@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>interCEde, live</title>
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><img src="/static/icon.svg" alt=""> interCEde</div>
+    <div class="scene-title">
+      <h1 id="scene-title"></h1>
+      <p id="scene-caption"></p>
+    </div>
+    <div id="scene-badges" class="badges"></div>
+  </header>
+
+  <main id="stage"></main>
+
+  <footer class="bar">
+    <nav id="scene-nav" class="scene-nav" aria-label="Scenes"></nav>
+    <div id="stacks" class="stacks" aria-label="Stacks"></div>
+    <div class="controls">
+      <div class="mode" role="group" aria-label="Data mode">
+        <button data-mode="live">Live</button>
+        <button data-mode="fake">Fake</button>
+        <button data-mode="replay">Replay</button>
+      </div>
+      <button id="record" class="ghost" title="Record this session to demo/recordings/">● Record</button>
+      <button id="reset" class="ghost" title="Purge every job, clear the board and the traces">Reset</button>
+      <button id="theme" class="ghost" title="Light / dark">◐</button>
+    </div>
+  </footer>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>
