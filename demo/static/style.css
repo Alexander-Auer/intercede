@@ -207,9 +207,9 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 }
 .tile .why { font-size: 12px; margin-top: 2px; }
 
-.actions { position: sticky; bottom: 0; margin-top: 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.actions { margin: 0 0 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .actions .count { margin-right: 8px; }
-.outcomes { margin-top: 14px; display: grid; gap: 8px; }
+.outcomes { margin: 0 0 16px; display: grid; gap: 8px; }
 .outcome { display: grid; grid-template-columns: 34px 220px 1fr; gap: 10px; align-items: start; font-size: 17px; padding: 6px 10px; border-radius: 8px; background: var(--panel-2); }
 .outcome .ok { font-weight: 800; }
 .outcome .ok.yes { color: var(--st-done); }

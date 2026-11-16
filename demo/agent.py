@@ -184,6 +184,9 @@ def _write(message: dict[str, Any]) -> None:
 class AgentBackend:
     """A BatchBackend in the Slurm container, reached through the agent's pipe."""
 
+    # What runs in the container, for the board: this class only carries the calls.
+    shown_class = "BatchBackend (in the Slurm container)"
+
     def __init__(self, compose_file: Path, tracer: Tracer) -> None:
         self._compose = compose_file
         self._tracer = tracer

@@ -75,7 +75,10 @@ class Column:
             "state": self.state,
             "reason": self.reason,
             "capabilities": self.caps,
-            "backend_class": type(self.backend.inner).__name__
+            # The agent's proxy says what runs in the container behind it.
+            "backend_class": getattr(
+                self.backend.inner, "shown_class", type(self.backend.inner).__name__
+            )
             if self.backend
             else None,
             "resource": self.backend.resource if self.backend else None,

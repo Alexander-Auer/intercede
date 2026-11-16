@@ -114,6 +114,7 @@ function apply(event) {
       store.replaying = Boolean(event.name);
       break;
     case "recording":
+      if (event.replayed) break; // the recording's own start, played back
       store.recording = event.on;
       if (event.saved) toast(`Saved demo/recordings/${event.saved}`, "info");
       break;
@@ -148,9 +149,14 @@ function connect() {
   source.onopen = () => { store.connected = true; };
   source.onerror = () => { store.connected = false; };
   source.onmessage = (message) => {
-    const event = JSON.parse(message.data);
-    apply(event);
-    for (const fn of listeners) fn(event);
+    // One bad event must never freeze the presentation: show it, and go on.
+    try {
+      const event = JSON.parse(message.data);
+      apply(event);
+      for (const fn of listeners) fn(event);
+    } catch (err) {
+      toast(`event not shown: ${err.message}`, "warning");
+    }
     schedule();
   };
 }
@@ -202,7 +208,11 @@ function schedule() {
   pending = true;
   requestAnimationFrame(() => {
     pending = false;
-    mounted?.update?.(context());
+    try {
+      mounted?.update?.(context());
+    } catch (err) {
+      toast(`${mounted.title}: ${err.message}`, "warning");
+    }
     drawChrome();
   });
 }

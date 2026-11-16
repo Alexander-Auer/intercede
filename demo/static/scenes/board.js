@@ -36,7 +36,6 @@ export default {
           <div class="row"><button class="primary" id="submit">Submit</button><span class="muted" id="submit-note"></span></div>
         </div>
       </div>
-      <div class="columns" id="columns"></div>
       <div class="actions panel" id="actions">
         <span class="count" id="selected-count"></span>
         <button class="action" data-op="kill">Kill</button>
@@ -45,7 +44,8 @@ export default {
         <button class="action" data-op="get_diagnostics">Diagnostics</button>
         <button class="ghost" id="select-none">Clear selection</button>
       </div>
-      <div class="outcomes" id="outcomes"></div>`;
+      <div class="outcomes" id="outcomes"></div>
+      <div class="columns" id="columns"></div>`;
 
     el.querySelector("#consumer-code").innerHTML = highlight(excerpt(ctx.store.meta.consumer.source));
     el.querySelector("#copies").value = copies;
