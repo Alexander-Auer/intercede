@@ -1,7 +1,11 @@
 // The presenter shell: one store fed by the server's event stream, and a row of scenes.
 // Every view is drawn from the store, so a replayed recording draws exactly as live.
 
+import architecture from "./scenes/architecture.js";
 import board from "./scenes/board.js";
+import composition from "./scenes/composition.js";
+import translation from "./scenes/translation.js";
+import verified from "./scenes/verified.js";
 import trace from "./scenes/trace.js";
 import lifecycle from "./scenes/lifecycle.js";
 import failure from "./scenes/failure.js";
@@ -15,14 +19,14 @@ const placeholder = (title, caption) => ({
 });
 
 export const SCENES = [
-  placeholder("Architecture", "One contract between the WMS and every resource."),
-  placeholder("Composition", "Every filled cell is a working backend without a class of its own."),
-  placeholder("Translation", "One specification, many dialects."),
+  architecture,
+  composition,
+  translation,
   board,
   trace,
   lifecycle,
   failure,
-  placeholder("Verified", "Tested against the real thing, in CI."),
+  verified,
 ];
 
 // -- the store --------------------------------------------------------------
@@ -149,7 +153,7 @@ export function escape(text) {
 }
 
 export function badge(label, small = false) {
-  const cls = label === "DRY RUN" ? "DRY" : label;
+  const cls = { "DRY RUN": "DRY", "FROM CODE": "CODE" }[label] ?? (label.startsWith("SNAPSHOT") ? "CODE" : label);
   return `<span class="badge ${cls}${small ? " small" : ""}">${escape(label)}</span>`;
 }
 

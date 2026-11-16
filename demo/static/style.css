@@ -257,3 +257,64 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); out
 .machine .state.now[data-status="Aborted"] rect { fill: var(--st-aborted); }
 .machine .state.now[data-status="Unknown"] rect { fill: var(--st-unknown); }
 .machine .step-no { font: 700 13px var(--sans); fill: var(--focus); text-anchor: middle; }
+
+/* -- architecture and composition ---------------------------------------------- */
+
+.badge.CODE { background: var(--ink-2); }
+.arch { display: grid; gap: 8px; }
+.arch .layer { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 12px 16px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.arch .layer.consumer { justify-content: space-between; }
+.arch .layer.contract { display: grid; gap: 8px; }
+.arch .families { display: grid; grid-template-columns: 1fr 1.6fr 1fr; gap: 12px; }
+.arch .families .layer { display: block; }
+.arch .families .layer .box { margin: 6px 6px 0 0; }
+.layer-title { font-weight: 700; font-size: 19px; width: 100%; }
+.layer-title .muted { font-weight: 400; font-size: 16px; }
+.ops { display: flex; gap: 10px; flex-wrap: wrap; }
+.down { text-align: center; color: var(--ink-2); font-size: 22px; }
+.box {
+  display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  border: 2px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+  border-radius: 10px; padding: 8px 14px; cursor: pointer; text-align: left; font-size: 19px;
+}
+.box small { color: var(--ink-2); font-size: 14px; }
+.box.wide { flex: 1; }
+.box.side { max-width: 38%; }
+.box.small { font-size: 16px; padding: 4px 10px; }
+.box.op.essential { border-width: 3px; }
+.box.op.optional { border-style: dashed; background: var(--panel); }
+.box.planned { border: 2px dashed var(--line); background: var(--panel-2); color: var(--ink-2); }
+.arch .doc { min-height: 90px; }
+
+table.grid { border-collapse: separate; border-spacing: 8px; width: 100%; margin-top: 6px; }
+table.grid th { text-align: left; font-size: 20px; padding: 6px 8px; }
+table.grid th small, table.grid td small { display: block; font-size: 13px; color: var(--ink-2); font-weight: 400; }
+.cell { padding: 16px 12px; border-radius: 10px; font-weight: 700; font-size: 19px; }
+.cell.verified { background: var(--st-done); color: #fff; }
+.cell.verified small, .cell.verified .muted { color: #fff !important; opacity: .9; }
+.cell.implemented { border: 3px solid var(--st-running); color: var(--st-running); background: var(--panel); }
+.cell.planned { border: 2px dashed var(--line); color: var(--ink-2); background: var(--panel-2); font-weight: 400; }
+
+/* -- translation ----------------------------------------------------------------- */
+
+.spec-form { display: grid; gap: 8px; font-size: 16px; }
+.spec-form label { display: grid; gap: 2px; color: var(--ink-2); }
+.spec-form .row label, .spec-form label.row { display: flex; align-items: center; gap: 6px; }
+.spec-form input, .spec-form textarea { font: 15px var(--mono); padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); }
+.spec-form textarea { resize: vertical; }
+.small-btn { font-size: 14px !important; padding: 3px 8px !important; }
+.dialect { font-size: 14px; max-height: 46vh; margin: 4px 0 8px; overflow: auto; white-space: pre; }
+.refusal { margin-top: 10px; padding: 12px 14px; border-radius: 10px; border: 3px solid var(--st-failed); color: var(--st-failed); }
+.refusal pre { color: var(--ink); margin-top: 6px; font: 16px/1.4 var(--mono); }
+
+/* -- CI heatmap ---------------------------------------------------------------------- */
+
+table.heat { border-collapse: separate; border-spacing: 4px; margin-top: 12px; }
+table.heat th.repo { text-align: left; font-size: 17px; border-bottom: 2px solid var(--line); }
+table.heat th.run { font: 13px var(--mono); }
+table.heat th.run a { color: var(--ink-2); text-decoration: none; }
+table.heat th.axis { text-align: right; padding-right: 12px; font-size: 17px; white-space: nowrap; }
+.heat-cell { display: inline-block; width: 30px; height: 30px; border-radius: 6px; vertical-align: middle; background: var(--panel-2); border: 1px dashed var(--line); }
+.heat-cell[data-status="Done"] { background: var(--st-done); border: 0; }
+.heat-cell[data-status="Failed"] { background: var(--st-failed); border: 0; }
+.heat-cell[data-status="Aborted"] { background: var(--st-aborted); border: 0; }

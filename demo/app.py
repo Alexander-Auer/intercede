@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from demo import consumer
+from demo import consumer, dryrun, views
 from demo.board import Board
 from demo.columns import Columns, compose_file, stacks
 from demo.events import Bus
@@ -131,6 +131,33 @@ async def meta() -> dict[str, Any]:
             for name, (title, needs) in SCENARIOS.items()
         ],
     }
+
+
+@app.get("/api/architecture")
+async def architecture() -> dict[str, Any]:
+    return views.architecture()
+
+
+@app.get("/api/composition")
+async def composition() -> dict[str, Any]:
+    return views.composition()
+
+
+@app.get("/api/ci")
+async def ci() -> Any:
+    """The CI snapshot demo/scripts/fetch_ci.py wrote; the demo itself fetches nothing."""
+    path = HERE / "data" / "ci.json"
+    return json.loads(path.read_text()) if path.is_file() else {"missing": True}
+
+
+class TranslateRequest(BaseModel):
+    form: dict[str, Any]
+    launcher: bool = False
+
+
+@app.post("/api/translate")
+async def translate(request: TranslateRequest) -> dict[str, Any]:
+    return await dryrun.translate(request.form, request.launcher)
 
 
 class SubmitRequest(BaseModel):
