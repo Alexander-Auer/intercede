@@ -168,6 +168,8 @@ export function escape(text) {
 }
 
 export function badge(label, small = false) {
+  // Played back, nothing may look live: every data badge then says where it really comes from.
+  if (store.replaying && (label === "LIVE" || label === "FAKE")) label = "REPLAY";
   const cls = { "DRY RUN": "DRY", "FROM CODE": "CODE" }[label] ?? (label.startsWith("SNAPSHOT") ? "CODE" : label);
   return `<span class="badge ${cls}${small ? " small" : ""}">${escape(label)}</span>`;
 }

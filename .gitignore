@@ -94,3 +94,6 @@ demo/.runtime/
 
 # The GitHub token the presentation app reads CI results with: never committed
 demo/.github-token
+
+# The presentation app's recordings are gzipped, and committed
+!demo/recordings/*.json.gz

@@ -32,8 +32,11 @@ stack minted at its start.
 
 ## Presenting
 
-- **←/→** (or Page Up/Down) step through the scenes, **1–8** jump. The URL keeps the scene (`#4`),
-  and `?theme=dark` picks the theme, so a bookmark opens the talk where it should.
+- The tabs under the title name every scene; the buttons beside them say which scene comes before
+  and after. **←/→** (or Space, Page Up/Down) step, **1–9** jump, and **Esc** (or ☰) shows the
+  whole talk with each scene's caption.
+- Each scene has an address by name (`#job-board`, `#normalisation`), and `?theme=dark` picks the
+  theme, so a bookmark opens the talk where it should.
 - The status bar shows which stacks are reachable, the mode, **Record** and **Reset**. Reset
   purges every job it can, then clears the board and the traces.
 - **Modes:** *Live* shows every column; *Fake* shows only the in-process Fake (no Docker needed);
@@ -42,7 +45,8 @@ stack minted at its start.
 Every view has a badge saying where its data comes from: **LIVE** (a real backend), **FAKE**
 (`FakeBackend`, in process), **REPLAY** (a recorded live run), **DRY RUN** (the real code, with the
 resource replaced by a recorder), **FROM CODE** (read from the library's source) or **SNAPSHOT**
-(the CI results, as of the date shown). Nothing simulated looks live.
+(the CI results, as of the time shown). Nothing simulated looks live: while a recording plays,
+every badge says REPLAY.
 
 ### Suggested order for a 15-minute talk
 
@@ -53,12 +57,13 @@ resource replaced by a recorder), **FROM CODE** (read from the library's source)
 | 3–5 | 3 Translation | Edit the spec: the same one becomes a submit description and a job array. Click *In a container*, *URL input*, *Outputs by pattern*: each backend refuses what it cannot honour, before anything runs. |
 | 5–9 | 4 Job board | Submit the quick job to all four. Same consumer code, four dialects. Submit *30 s with progress*; on the Fake, select one and press Diagnostics; on a real backend, the same button says the backend is not `Diagnosable`. Get output, then kill. |
 | 9–10 | 5 Trace | *Compare the latest submit on two backends*: the top is the same, the bottom is completely different. Click an arrow to show the argv, the staged files, the token request. |
-| 10–12 | 6 Lifecycle | Show the handle going into the database. *Restart interCEde*: a new backend finds every job from the stored handles alone. *Forged handle*: UNKNOWN, never dropped. |
-| 12–14 | 7 Partial failure | *Some copies refused*, then *Whole resource down* (raises) against *Per-job failures* (does not), then *Kill running and finished jobs* on a real backend. |
-| 14–15 | 8 Verified | Every stack × version runs the same contract suite on every pull request. |
+| 10–11 | 6 Normalisation | *Status*: condor_q's JSON and squeue's rows on the left, the same `Mapping[JobHandle, JobStatus]` on the right; the marked value and the rule under it show how each became a status. Then *Submit* and *Kill*. |
+| 11–12 | 7 Lifecycle | Show the handle going into the database. *Restart interCEde*: a new backend finds every job from the stored handles alone. *Forged handle*: UNKNOWN, never dropped. |
+| 12–14 | 8 Partial failure | *Some copies refused*, then *Whole resource down* (raises) against *Per-job failures* (does not), then *Kill running and finished jobs* on a real backend. |
+| 14–15 | 9 Verified | Press *Check the latest CI runs*: every stack × version runs the same contract suite on every pull request. |
 
 If Docker or the network lets you down, switch to **Replay**: `demo/recordings/` holds a complete
-run of scenes 4–7 against the live stacks.
+run of scenes 4–8 against the live stacks.
 
 ## Recording and replay
 
@@ -67,21 +72,27 @@ into `demo/recordings/<date-time>.json.gz`. **Replay** plays one back at 0.5–8
 views, with the badge forced to REPLAY. While a recording plays, live events reach no browser and
 every action that would reach a backend is refused (HTTP 409).
 
-Left out of recordings: the background `get_status` polls, which are most of the events and whose
-findings the board's own updates already carry. Collected output files are not in a recording
-either; replayed, their links only open what is still on this machine.
+The background `get_status` polls are most of the events, and most repeat the one before: a poll
+is kept only when its answer changed, with the commands it ran, so scene 6 replays the moments a
+status changed. Collected output files are not in a recording; replayed, their links only open
+what is still on this machine.
 
-## The CI snapshot
+## The CI scene
 
-Scene 8 shows `demo/data/ci.json`, which the app never refreshes itself. Before the talk, with the
-network:
+Scene 9 shows the last runs of `integration.yml` on DIRACGrid/intercede and
+Alexander-Auer/intercede, and the jobs CI names `stack / config / version` from `stacks.yml`.
+**Check the latest CI runs** reads them from the GitHub REST API through the server, and can repeat
+it every minute while the scene is shown. Each check is kept in `demo/data/ci.json`, so without the
+network the scene shows the last one, with its time. The same check from a terminal:
 
 ```sh
-pixi run -e demo python demo/scripts/fetch_ci.py   # GITHUB_TOKEN only raises the rate limit
+pixi run -e demo python demo/scripts/fetch_ci.py
 ```
 
-It reads the last runs of `integration.yml` on DIRACGrid/intercede and Alexander-Auer/intercede
-from the GitHub REST API, and the jobs CI names `stack / config / version` from `stacks.yml`.
+The token is read from `GITHUB_TOKEN`, or from `demo/.github-token` (one line, git-ignored, best
+`chmod 600`). It never leaves this host: the server registers it with the redactor before it asks
+GitHub anything, so no event, view or recording holds it. A fine-grained token with read access to
+public repositories is enough; revoke it after the talk.
 
 Without a token GitHub allows 60 requests an hour per address, and an institute's address is
 shared by everyone behind it. So a run that has finished is read only once: a refresh costs one
@@ -167,5 +178,5 @@ reaches a recording. The library's own suite does not collect them (`testpaths =
 | `board.py`, `payloads.py`, `scenarios.py` | the board, its payloads, the scripted scenes |
 | `views.py`, `dryrun.py` | the views read from the code, and the dry run |
 | `recording.py`, `recordings/` | record and replay, and the committed live run |
-| `scripts/fetch_ci.py`, `data/ci.json` | the CI snapshot |
+| `scripts/fetch_ci.py`, `data/ci.json` | reading the CI runs from GitHub, and the last result |
 | `static/` | the browser side: plain ES modules, SVG and CSS, no build step |
