@@ -16,12 +16,18 @@
     </div>
     <div id="scene-badges" class="badges"></div>
   </header>
+  <nav class="scenes" aria-label="Scenes">
+    <button id="previous" class="step-btn" title="Previous scene (←)"></button>
+    <div id="scene-tabs" class="tabs"></div>
+    <button id="next" class="step-btn next" title="Next scene (→)"></button>
+    <button id="open-overview" class="ghost" title="All scenes (Esc)">☰</button>
+  </nav>
+  <div id="overview" class="overview" hidden></div>
 
   <div id="replay-bar" class="replay-bar" hidden></div>
   <main id="stage"></main>
 
   <footer class="bar">
-    <nav id="scene-nav" class="scene-nav" aria-label="Scenes"></nav>
     <div id="stacks" class="stacks" aria-label="Stacks"></div>
     <div class="controls">
       <div class="mode" role="group" aria-label="Data mode">

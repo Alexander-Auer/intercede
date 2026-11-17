@@ -9,25 +9,11 @@ import verified from "./scenes/verified.js";
 import trace from "./scenes/trace.js";
 import lifecycle from "./scenes/lifecycle.js";
 import failure from "./scenes/failure.js";
+import normalisation from "./scenes/normalisation.js";
 
-const placeholder = (title, caption) => ({
-  title,
-  caption,
-  mount(el) {
-    el.innerHTML = `<div class="placeholder">${title}: not built yet</div>`;
-  },
-});
-
-export const SCENES = [
-  architecture,
-  composition,
-  translation,
-  board,
-  trace,
-  lifecycle,
-  failure,
-  verified,
-];
+// The talk, in order. Each scene's id is its address (#job-board), so links survive new scenes.
+export const SCENES = [architecture, composition, translation, board, trace, normalisation, lifecycle, failure, verified];
+for (const scene of SCENES) scene.id ??= scene.title.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
 // -- the store --------------------------------------------------------------
 
@@ -46,6 +32,8 @@ export const store = {
   replay: null,
   recording: false,
   recordings: [],
+  ci: null,
+  ciStatus: null,
   connected: false,
 };
 
@@ -122,6 +110,10 @@ function apply(event) {
       store.ops.clear();
       store.outcomes = store.restart = store.forged = store.scenario = null;
       break;
+    case "ci.status":
+      store.ciStatus = event;
+      if (event.snapshot) store.ci = event.snapshot;
+      break;
     case "alert":
       toast(`${event.column}: ${event.message}`, event.level);
       break;
@@ -194,8 +186,41 @@ function show(index) {
   document.getElementById("scene-title").textContent = `${index + 1}. ${mounted.title}`;
   document.getElementById("scene-caption").textContent = mounted.caption;
   mounted.mount(stage, context());
-  history.replaceState(null, "", `#${index + 1}`);
+  history.replaceState(null, "", `${location.search}#${mounted.id}`);
+  overview(false);
+  drawTabs();
   drawChrome();
+}
+
+function sceneOf(hash) {
+  const key = decodeURIComponent(hash.replace(/^#/, ""));
+  if (/^[0-9]+$/.test(key)) return Number(key) - 1;
+  const found = SCENES.findIndex((scene) => scene.id === key);
+  return found >= 0 ? found : SCENES.indexOf(board);
+}
+
+// -- finding your way: tabs, previous and next, and an overview -----------------
+
+function drawTabs() {
+  document.getElementById("scene-tabs").innerHTML = SCENES.map((scene, i) =>
+    `<button class="tab ${i === current ? "active" : ""} ${i < current ? "seen" : ""}" data-scene="${i}" title="${escape(scene.caption)}">
+      <span class="tab-no">${i + 1}</span>${escape(scene.title)}</button>`).join("");
+  const previous = SCENES[current - 1];
+  const next = SCENES[current + 1];
+  document.getElementById("previous").innerHTML = previous ? `‹ <span>${escape(previous.title)}</span>` : "";
+  document.getElementById("previous").disabled = !previous;
+  document.getElementById("next").innerHTML = next ? `<span>${escape(next.title)}</span> ›` : "";
+  document.getElementById("next").disabled = !next;
+  document.getElementById("overview").innerHTML = `
+    <div class="overview-head"><strong>The talk</strong><span class="muted">← → to step · 1–9 to jump · Esc to close</span></div>
+    <div class="overview-grid">${SCENES.map((scene, i) => `
+      <button class="overview-card ${i === current ? "active" : ""}" data-scene="${i}">
+        <span class="tab-no">${i + 1}</span><strong>${escape(scene.title)}</strong>
+        <span class="muted">${escape(scene.caption)}</span></button>`).join("")}</div>`;
+}
+
+function overview(open = document.getElementById("overview").hidden) {
+  document.getElementById("overview").hidden = !open;
 }
 
 function context() {
@@ -224,9 +249,6 @@ function sourcesOf(scene) {
 
 function drawChrome() {
   document.getElementById("scene-badges").innerHTML = sourcesOf(mounted).map((s) => badge(s)).join("");
-  document.getElementById("scene-nav").innerHTML = SCENES.map(
-    (scene, i) => `<button class="${i === current ? "active" : ""}" data-scene="${i}" title="${escape(scene.title)}">${i + 1}</button>`,
-  ).join("");
   document.getElementById("stacks").innerHTML = store.columns
     .filter((c) => c.stack)
     .map((c) => `<span class="stack-dot ${c.state}" title="${escape(c.reason || c.resource || "")}">${escape(c.title)}</span>`)
@@ -241,16 +263,23 @@ function drawChrome() {
   drawReplayBar();
 }
 
-document.getElementById("scene-nav").addEventListener("click", (e) => {
+document.addEventListener("click", (e) => {
   const target = e.target.closest("[data-scene]");
   if (target) show(Number(target.dataset.scene));
 });
+document.getElementById("previous").addEventListener("click", () => show(current - 1));
+document.getElementById("next").addEventListener("click", () => show(current + 1));
+document.getElementById("open-overview").addEventListener("click", () => overview());
+window.addEventListener("hashchange", () => show(sceneOf(location.hash)));
 
 document.addEventListener("keydown", (e) => {
   if (e.target.closest("input, textarea, select")) return;
-  if (e.key === "ArrowRight" || e.key === "PageDown") show(current + 1);
+  if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === " ") show(current + 1);
   else if (e.key === "ArrowLeft" || e.key === "PageUp") show(current - 1);
   else if (/^[1-9]$/.test(e.key)) show(Number(e.key) - 1);
+  else if (e.key === "Escape" || e.key === "o") overview();
+  else return;
+  e.preventDefault();
 });
 
 document.querySelector(".mode").addEventListener("click", async (e) => {
@@ -309,4 +338,4 @@ document.getElementById("theme").addEventListener("click", () => {
 
 store.meta = await api("/api/meta");
 connect();
-show(Number(location.hash.slice(1) || 4) - 1);
+show(sceneOf(location.hash || "#job-board"));

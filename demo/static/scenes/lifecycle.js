@@ -1,4 +1,4 @@
-// Scene 6: the JobStatus state machine, the handle a consumer stores, and a restart that finds every job again.
+// Scene 7: the JobStatus state machine, the handle a consumer stores, and a restart that finds every job again.
 
 let chosen = null; // job key
 

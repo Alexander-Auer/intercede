@@ -5,8 +5,10 @@ redacted, preceded by a full snapshot. Playing it back sends the same events
 again, so the views draw exactly what they drew live; the badge says REPLAY.
 While a recording plays, live events reach no browser.
 
-The background polls (``get_status`` on a timer) are left out: they are most of
-the events, and the board's own updates already carry what they found.
+The background polls (``get_status`` on a timer) are most of the events, and
+most say what the one before said. A poll is kept only when its answer differs
+from the last one kept for its backend, with the commands it ran: the moments a
+status changed, and the resource's output that showed it.
 Recordings are gzipped JSON, to keep them small enough to commit.
 """
 
@@ -33,7 +35,9 @@ class Recorder:
         self.events: list[dict[str, Any]] = []
         self._started = 0.0
         self._untap: Callable[[], None] | None = None
-        self._polls: set[int] = set()  # operation ids of the polls left out
+        # A poll's events, held back until its answer shows whether it is new.
+        self._polls: dict[int, list[dict[str, Any]]] = {}
+        self._answers: dict[str, Any] = {}  # column -> the last answer kept
 
     @property
     def on(self) -> bool:
@@ -42,19 +46,27 @@ class Recorder:
     def start(self, snapshot: dict[str, Any]) -> None:
         self._started = time.time()
         self._polls.clear()
+        self._answers.clear()
         self.events = [{"dt": 0.0, "event": self.bus.redactor.scrub(snapshot)}]
         self._untap = self.bus.tap(self._keep)
 
     def _keep(self, event: dict[str, Any]) -> None:
         kind = event["type"]
+        dt = round(time.time() - self._started, 3)
         if kind == "op.start" and event["op"]["name"] == "get_status":
-            self._polls.add(event["op"]["id"])
+            self._polls[event["op"]["id"]] = [{"dt": dt, "event": event}]
             return
         if kind in ("op.step", "op.end") and event["id"] in self._polls:
+            held = self._polls[event["id"]]
+            held.append({"dt": dt, "event": event})
+            if kind == "op.end":
+                del self._polls[event["id"]]
+                column = held[0]["event"]["op"]["column"]
+                if event["outcome"] != self._answers.get(column):
+                    self._answers[column] = event["outcome"]
+                    self.events.extend(held)
             return
-        self.events.append(
-            {"dt": round(time.time() - self._started, 3), "event": event}
-        )
+        self.events.append({"dt": dt, "event": event})
 
     def stop(self) -> Path:
         if self._untap is not None:

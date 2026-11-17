@@ -1,4 +1,4 @@
-// Scene 7: partial failure, reported per job; only a failure of the whole operation raises.
+// Scene 8: partial failure, reported per job; only a failure of the whole operation raises.
 
 let column = "fake";
 

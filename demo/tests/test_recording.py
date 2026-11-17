@@ -92,14 +92,35 @@ async def test_a_recording_plays_back_the_same_events(recordings_here: Path):
     recorder = Recorder(bus)
     recorder.start({"type": "hello", "jobs": []})
     bus.publish({"type": "board", "jobs": [{"key": "a"}]})
-    bus.publish(
-        {"type": "op.start", "op": {"id": 7, "name": "get_status", "column": "x"}}
-    )  # a poll: left out
-    bus.publish({"type": "op.end", "id": 7, "outcome": {}})
+
+    def poll(op_id: int, status: str) -> None:
+        bus.publish(
+            {
+                "type": "op.start",
+                "op": {"id": op_id, "name": "get_status", "column": "x"},
+            }
+        )
+        bus.publish({"type": "op.step", "id": op_id, "step": {"lane": "transport"}})
+        bus.publish(
+            {"type": "op.end", "id": op_id, "outcome": {"per_job": {"j": status}}}
+        )
+
+    poll(7, "Running")  # the first answer: kept
+    poll(8, "Running")  # the same again: left out
+    poll(9, "Done")  # changed: kept, with its steps
     path = recorder.stop()
 
     data = recording.load(path)
-    assert [e["event"]["type"] for e in data["events"]] == ["hello", "board"]
+    kept = [
+        (e["event"]["type"], e["event"].get("id") or e["event"].get("op", {}).get("id"))
+        for e in data["events"]
+    ]
+    assert kept == [
+        ("hello", None),
+        ("board", None),
+        *[(kind, 7) for kind in ("op.start", "op.step", "op.end")],
+        *[(kind, 9) for kind in ("op.start", "op.step", "op.end")],
+    ]
     assert recording.recordings()[0]["name"] == path.name
 
     queue = bus.listen()
@@ -114,7 +135,7 @@ async def test_a_recording_plays_back_the_same_events(recordings_here: Path):
     while not queue.empty():
         seen.append(queue.get_nowait())
     played = [e for e in seen if e.get("replayed") and e["type"] != "replay"]
-    assert [e["type"] for e in played] == ["hello", "board"]
+    assert [e["type"] for e in played][:2] == ["hello", "board"]
     assert all(e["jobs"] != [{"key": "live"}] for e in seen if e["type"] == "board")
 
 
@@ -130,3 +151,25 @@ def test_the_dry_run_builds_backends_from_the_registry():
     for config in dryrun.TARGETS.values():
         assert registry.available()["backend"]  # the classes it loads are registered
         assert config["kind"] in registry.available()["backend"]
+
+
+def test_the_github_token_is_read_from_its_file_and_never_shown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from demo.scripts import fetch_ci
+
+    secret = "github_pat_" + "x" * 40  # a fake, shaped like a fine-grained token
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setattr(fetch_ci, "TOKEN_FILE", tmp_path / ".github-token")
+    assert fetch_ci.token() is None
+    fetch_ci.TOKEN_FILE.write_text(secret + "\n")
+    assert fetch_ci.token() == secret
+    # What the refresh endpoint does with it before asking GitHub anything.
+    bus = Bus()
+    bus.redactor.add(secret)
+    seen: list[dict[str, str]] = []
+    bus.tap(seen.append)
+    bus.publish(
+        {"type": "ci.status", "state": "failed", "message": f"401 for {secret}"}
+    )
+    assert secret not in json.dumps(seen)
