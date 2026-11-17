@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import inspect
 import json
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -23,14 +24,18 @@ from demo.events import Bus
 from demo.payloads import PAYLOADS
 from demo.recording import Player, Recorder, recordings
 from demo.scenarios import SCENARIOS, Scenarios
+from demo.scripts import fetch_ci
 from demo.tracing import Tracer
 from intercede import JobStatus
+from intercede._backends._htcondor import status as htcondor_status
+from intercede._backends._slurm import status as slurm_status
 
 HERE = Path(__file__).parent
 STATIC = HERE / "static"
 RUNTIME = HERE / ".runtime"  # payload scripts and collected output; git-ignored
 STACK_REFRESH_S = 5.0
 HEARTBEAT_S = 15.0
+CI_RUNS = 12  # runs per repository on the CI scene
 
 
 class State:
@@ -141,6 +146,17 @@ async def meta() -> dict[str, Any]:
         ],
         "statuses": [status.value for status in JobStatus],
         "consumer": {"path": "demo/consumer.py", "source": inspect.getsource(consumer)},
+        # How each tool's states become a JobStatus, read from the backends' own tables.
+        "mappings": {
+            "slurm": {
+                state: str(status) for state, status in slurm_status._STATES.items()
+            },
+            "htcondor": {
+                str(code): str(status)
+                for code, status in htcondor_status._STATES.items()
+            },
+            "htcondor_finished": inspect.getdoc(htcondor_status._result),
+        },
         "scenarios": [
             {"name": name, "title": title, "needs": needs}
             for name, (title, needs) in SCENARIOS.items()
@@ -160,9 +176,43 @@ async def composition() -> dict[str, Any]:
 
 @app.get("/api/ci")
 async def ci() -> Any:
-    """The CI snapshot demo/scripts/fetch_ci.py wrote; the demo itself fetches nothing."""
-    path = HERE / "data" / "ci.json"
+    """The CI snapshot: as fetch_ci.py or the refresh button last wrote it."""
+    path = fetch_ci.OUT
     return json.loads(path.read_text()) if path.is_file() else {"missing": True}
+
+
+_ci_refreshing = asyncio.Lock()
+
+
+@app.post("/api/ci/refresh")
+async def ci_refresh() -> Any:
+    """Read the latest integration runs from GitHub now, and keep them as the snapshot.
+
+    The token stays on this host: it is registered with the redactor first, so
+    no event, view or recording can ever hold it.
+    """
+    state = _state()
+    if secret := fetch_ci.token():
+        state.bus.redactor.add(secret)
+    if _ci_refreshing.locked():
+        raise HTTPException(409, "already checking")
+    async with _ci_refreshing:
+        state.bus.publish({"type": "ci.status", "state": "checking"})
+        try:
+            snapshot = await asyncio.to_thread(fetch_ci.fetch, CI_RUNS)
+        except fetch_ci.RateLimitError as exc:
+            when = time.strftime("%H:%M", time.localtime(exc.reset))
+            message = f"GitHub's rate limit is used up until {when}"
+        except OSError as exc:  # no network, or GitHub refused
+            message = f"GitHub could not be reached: {exc}"
+        else:
+            fetch_ci.save(snapshot)
+            state.bus.publish(
+                {"type": "ci.status", "state": "done", "snapshot": snapshot}
+            )
+            return snapshot
+    state.bus.publish({"type": "ci.status", "state": "failed", "message": message})
+    raise HTTPException(502, message)
 
 
 class TranslateRequest(BaseModel):

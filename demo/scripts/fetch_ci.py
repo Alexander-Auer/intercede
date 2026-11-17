@@ -6,7 +6,8 @@ The demo itself never fetches anything; it shows the snapshot and its date.
 It reads the GitHub REST API: the latest runs of ``integration.yml`` on each
 repository, and the jobs of each run, which CI names ``stack / config / version``
 from tests/integration/stacks.yml. Both repositories are public, so no token is
-needed; ``GITHUB_TOKEN``, when set, only raises the rate limit.
+needed; a token (``GITHUB_TOKEN``, or the git-ignored file demo/.github-token)
+only raises the rate limit.
 
 Without a token GitHub allows 60 requests an hour per address, and an address
 may be shared by a whole site. So a run that has finished is read once: its jobs
@@ -41,6 +42,8 @@ API = "https://api.github.com"
 REPOSITORIES = ("DIRACGrid/intercede", "Alexander-Auer/intercede")
 WORKFLOW = "integration.yml"
 OUT = ROOT / "demo" / "data" / "ci.json"
+# Where the app looks for a token when GITHUB_TOKEN is not set; git-ignored.
+TOKEN_FILE = ROOT / "demo" / ".github-token"
 
 
 # Conclusions of a run that has finished: its jobs never change again.
@@ -67,8 +70,8 @@ def get(path: str) -> Any:
     request = urllib.request.Request(  # noqa: S310  (API is a fixed https URL)
         f"{API}{path}", headers={"Accept": "application/vnd.github+json"}
     )
-    if token := os.environ.get("GITHUB_TOKEN"):
-        request.add_header("Authorization", f"Bearer {token}")
+    if secret := token():
+        request.add_header("Authorization", f"Bearer {secret}")
     try:
         with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310  (a fixed https URL)
             return json.load(response)
@@ -78,6 +81,15 @@ def get(path: str) -> Any:
                 0, int(exc.headers.get("X-RateLimit-Reset", "0"))
             ) from None
         raise
+
+
+def token() -> str | None:
+    """A GitHub token, from GITHUB_TOKEN or demo/.github-token; None to ask without one."""
+    if secret := os.environ.get("GITHUB_TOKEN"):
+        return secret.strip()
+    if TOKEN_FILE.is_file():
+        return TOKEN_FILE.read_text().strip() or None
+    return None
 
 
 def budget() -> tuple[int, int]:
@@ -132,9 +144,13 @@ def main() -> None:
             "to any GitHub token, which raises the limit to 5000 an hour. "
             f"{OUT.relative_to(ROOT)} is unchanged."
         )
+    save(snapshot)
+    print(f"wrote {OUT.relative_to(ROOT)}")
+
+
+def save(snapshot: dict[str, Any]) -> None:
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(snapshot, indent=1) + "\n")
-    print(f"wrote {OUT.relative_to(ROOT)}")
 
 
 def fetch(count: int) -> dict[str, Any]:
