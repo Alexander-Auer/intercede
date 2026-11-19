@@ -1,4 +1,4 @@
-"""The shared ARC knowledge: job descriptions.
+"""The shared ARC knowledge: job descriptions, the REST interface and the state mapping.
 
 The descriptions were checked against ARC 7.2: its own job description parser
 reads every value asserted here back as written, and gives the batch system
@@ -7,11 +7,14 @@ the memory, wall time and slots expected.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from xml.etree import ElementTree
 
 import pytest
 
+from intercede import JobStatus
+from intercede._backends._arc import rest, status
 from intercede._backends._arc.description import (
     ADL_NAMESPACE,
     InputFile,
@@ -196,3 +199,163 @@ class TestRender:
     def test_sets_no_policy_on_the_job(self, element: str):
         # When a job expires, is wiped or retried is the consumer's policy.
         assert parse().findall(f".//adl:{element}", NS) == []
+
+
+# --------------------------------------------------------------------------
+# The REST interface
+# --------------------------------------------------------------------------
+
+
+class TestPaths:
+    def test_api_url(self):
+        expected = "https://arc.example.org:443/arex/rest/1.1/"
+        assert rest.api_url("https://arc.example.org:443/arex") == expected
+        assert rest.api_url("https://arc.example.org:443/arex/") == expected
+
+    def test_jobs_body(self):
+        assert rest.jobs_body(["a1", "b2"]) == {"job": [{"id": "a1"}, {"id": "b2"}]}
+
+    @pytest.mark.parametrize(
+        ("name", "path"),
+        [
+            ("", "jobs/a1B2/session/"),
+            ("out.txt", "jobs/a1B2/session/out.txt"),
+            ("dir/a b#?.txt", "jobs/a1B2/session/dir/a%20b%23%3F.txt"),
+        ],
+    )
+    def test_session_path(self, name: str, path: str):
+        assert rest.session_path("a1B2", name) == path
+
+    @pytest.mark.parametrize("name", ["/etc/passwd", "../other", "a/../../b"])
+    def test_session_path_stays_in_the_session(self, name: str):
+        with pytest.raises(ValueError, match="not inside the session directory"):
+            rest.session_path("a1", name)
+
+    @pytest.mark.parametrize("job_id", ["", "a/b", "a1?action=kill", "../x", "a 1"])
+    def test_only_job_ids_reach_a_url(self, job_id: str):
+        assert not rest.is_job_id(job_id)
+        with pytest.raises(ValueError, match="not an ARC job ID"):
+            rest.session_path(job_id)
+        with pytest.raises(ValueError, match="not an ARC job ID"):
+            rest.diagnose_path(job_id, "errors")
+
+    def test_diagnose_path(self):
+        assert rest.diagnose_path("a1", "errors") == "jobs/a1/diagnose/errors"
+        with pytest.raises(ValueError, match="not a file ARC keeps"):
+            rest.diagnose_path("a1", "../session")
+
+
+def answer(*jobs: dict[str, Any]) -> str:
+    return json.dumps({"job": list(jobs)})
+
+
+class TestParseJobs:
+    def test_one_entry_per_job(self):
+        raw = answer(
+            {
+                "status-code": "201",
+                "reason": "Created",
+                "id": "a1",
+                "state": "ACCEPTING",
+            },
+            {"status-code": "500", "reason": "Requested queue is not available"},
+        )
+        created, refused = rest.parse_jobs(raw)
+        assert created == rest.JobAnswer(201, "Created", "a1", "ACCEPTING")
+        assert created.ok
+        assert refused == rest.JobAnswer(500, "Requested queue is not available")
+        assert not refused.ok
+
+    def test_a_single_entry_as_a_value(self):
+        # How version 1.0 of the interface wrote one job.
+        raw = json.dumps({"job": {"status-code": 200, "reason": "OK", "id": "a1"}})
+        assert rest.parse_jobs(raw) == [rest.JobAnswer(200, "OK", "a1")]
+
+    @pytest.mark.parametrize("raw", ["", "  \n", '{"job": []}', "{}"])
+    def test_no_jobs(self, raw: str):
+        assert rest.parse_jobs(raw) == []
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "not json",
+            "[]",
+            '{"job": ["a1"]}',
+            '{"job": [{"reason": "OK"}]}',
+            '{"job": [{"status-code": "x", "reason": "OK"}]}',
+            '{"job": [{"status-code": 200, "reason": "OK", "id": 7}]}',
+        ],
+        ids=["garbage", "list", "bare-id", "no-code", "bad-code", "numeric-id"],
+    )
+    def test_anything_else_is_refused(self, raw: str):
+        with pytest.raises(ValueError):
+            rest.parse_jobs(raw)
+
+
+class TestParseListing:
+    def test_files_and_directories(self):
+        raw = json.dumps({"file": ["a.txt", "b.txt"], "dirs": ["sub"]})
+        assert rest.parse_listing(raw) == rest.Listing(("a.txt", "b.txt"), ("sub",))
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("", rest.Listing()),  # an empty directory
+            ('{"file": "a.txt"}', rest.Listing(("a.txt",))),  # version 1.0
+            ('{"dirs": "sub"}', rest.Listing((), ("sub",))),
+        ],
+        ids=["empty", "one-file", "one-dir"],
+    )
+    def test_short_answers(self, raw: str, expected: rest.Listing):
+        assert rest.parse_listing(raw) == expected
+
+    @pytest.mark.parametrize("raw", ["[]", '{"file": [1]}', "not json"])
+    def test_anything_else_is_refused(self, raw: str):
+        with pytest.raises(ValueError):
+            rest.parse_listing(raw)
+
+
+# --------------------------------------------------------------------------
+# State mapping
+# --------------------------------------------------------------------------
+
+
+class TestJobStatus:
+    @pytest.mark.parametrize(
+        ("state", "expected"),
+        [
+            ("ACCEPTING", JobStatus.WAITING),
+            ("ACCEPTED", JobStatus.WAITING),
+            ("PREPARING", JobStatus.WAITING),
+            ("PREPARED", JobStatus.WAITING),
+            ("SUBMITTING", JobStatus.WAITING),
+            ("QUEUING", JobStatus.WAITING),
+            ("RUNNING", JobStatus.RUNNING),
+            ("OTHER", JobStatus.RUNNING),
+            ("EXITINGLRMS", JobStatus.RUNNING),
+            ("EXECUTED", JobStatus.RUNNING),
+            ("FINISHING", JobStatus.RUNNING),
+            ("FINISHED", JobStatus.DONE),
+            ("FAILED", JobStatus.FAILED),
+            ("KILLING", JobStatus.ABORTED),
+            ("KILLED", JobStatus.ABORTED),
+        ],
+    )
+    def test_states_as_in_dirac(self, state: str, expected: JobStatus):
+        assert status.job_status(state) == expected
+
+    def test_held_is_waiting(self):
+        # The batch system can release it; interCEde does not kill it.
+        assert status.job_status("HELD") == JobStatus.WAITING
+
+    def test_wiped_is_unknown(self):
+        # ARC removed the job's files, and with them how the job ended.
+        assert status.job_status("WIPED") == JobStatus.UNKNOWN
+
+    @pytest.mark.parametrize("state", ["Queuing", "queuing"])
+    def test_any_case(self, state: str):
+        assert status.job_status(state) == JobStatus.WAITING
+
+    @pytest.mark.parametrize("state", ["", "DELETED", "None", "UNDEFINED"])
+    def test_anything_else_is_unknown(self, state: str):
+        assert status.job_status(state) == JobStatus.UNKNOWN
