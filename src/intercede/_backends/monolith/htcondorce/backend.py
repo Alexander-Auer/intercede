@@ -33,7 +33,7 @@ from intercede._backends.monolith.htcondorce.session import (
 from intercede.auth.models import BearerToken
 from intercede.auth.protocols import CredentialProvider
 from intercede.config import HTCondorCEConfig
-from intercede.exceptions import InterCEdeError
+from intercede.exceptions import InterCEdeError, SpecificationRejectedError
 from intercede.models import (
     CopyVars,
     JobHandle,
@@ -144,6 +144,9 @@ class HTCondorCEBackend:
             submission.mkdir(mode=0o700)
             try:
                 inputs = staging.stage_inputs(spec, submission)
+                # Every description is written before the first is submitted:
+                # a value one cannot hold refuses the whole submission.
+                descriptions: list[tuple[list[int], Path]] = []
                 for group in staging.group_by_environment(spec, copy_vars):
                     plan = SubmitPlan(
                         executable=executable,
@@ -164,7 +167,12 @@ class HTCondorCEBackend:
                         queue=spec.resources.queue or self._settings.queue,
                     )
                     description = submission / f"group-{group[0]}.sub"
-                    description.write_text(render(plan))
+                    try:
+                        description.write_text(render(plan))
+                    except ValueError as exc:
+                        raise SpecificationRejectedError(str(exc)) from exc
+                    descriptions.append((group, description))
+                for group, description in descriptions:
                     try:
                         ids = await session.submit(description, len(group))
                     except InterCEdeError as exc:
