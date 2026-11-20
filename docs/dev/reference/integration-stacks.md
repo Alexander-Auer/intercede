@@ -135,3 +135,6 @@ Markers, defined in `pyproject.toml`: `contract`, `remote`, `scheduler`, `arc`, 
 Tests marked `contract` are the shared suite and run on every stack: with `--stack`, they get the
 markers that the stack's `markers` expression asks for, so `-m "<markers>"` selects them. The
 other markers select tests for behaviour only some backends have.
+
+A stack can land before its backend. Until the registry has a backend for the stack's `kind`, the
+shared suite is skipped on it, with the reason, and only the stack's own tests run.
