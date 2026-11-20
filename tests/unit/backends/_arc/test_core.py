@@ -294,7 +294,7 @@ class TestParseJobs:
 
 class TestParseListing:
     def test_files_and_directories(self):
-        raw = json.dumps({"file": ["a.txt", "b.txt"], "dirs": ["sub"]})
+        raw = json.dumps({"file": ["a.txt", "b.txt"], "dir": ["sub"]})
         assert rest.parse_listing(raw) == rest.Listing(("a.txt", "b.txt"), ("sub",))
 
     @pytest.mark.parametrize(
@@ -302,7 +302,7 @@ class TestParseListing:
         [
             ("", rest.Listing()),  # an empty directory
             ('{"file": "a.txt"}', rest.Listing(("a.txt",))),  # version 1.0
-            ('{"dirs": "sub"}', rest.Listing((), ("sub",))),
+            ('{"dir": "sub"}', rest.Listing((), ("sub",))),
         ],
         ids=["empty", "one-file", "one-dir"],
     )

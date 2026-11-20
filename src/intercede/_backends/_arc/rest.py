@@ -150,7 +150,8 @@ def parse_jobs(raw: str) -> list[JobAnswer]:
 def parse_listing(raw: str) -> Listing:
     """Read the answer to a request for a directory of a session directory.
 
-    ARC answers an empty directory with an empty body.
+    ARC answers an empty directory with an empty body, and lists directories
+    under "dir".
 
     Raises:
         ValueError: The body is not a listing.
@@ -160,7 +161,7 @@ def parse_listing(raw: str) -> Listing:
     listing = _object(raw)
     return Listing(
         files=_names(listing.get("file"), "file"),
-        dirs=_names(listing.get("dirs"), "dirs"),
+        dirs=_names(listing.get("dir"), "dir"),
     )
 
 
