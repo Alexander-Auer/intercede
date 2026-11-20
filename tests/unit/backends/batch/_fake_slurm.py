@@ -3,7 +3,7 @@
 This file is both: the fixture puts a small script on ``PATH`` per tool, which runs
 this file as a program with that tool's name and keeps its state in files; and the
 tests import ``FakeSlurm`` to look at that state and change it.
-It prints what the real tools were seen to print (``_slurm/test_core.py``). A job
+It prints what the real tools were seen to print on the Slurm stacks. A job
 runs to its end during ``sbatch``, unless the cluster was told to ``hold`` them.
 """
 
@@ -39,6 +39,10 @@ class FakeSlurm:
     def run(self, job: str) -> None:
         """Say a held job has started."""
         self._change(lambda state: state["tasks"].update({job: "RUNNING"}))
+
+    def report(self, job: str, task_state: str) -> None:
+        """Have the cluster report this state for a job."""
+        self._change(lambda state: state["tasks"].update({job: task_state}))
 
     def forget(self) -> None:
         """Have the controller forget every job, as it does a while after one ended."""

@@ -33,6 +33,7 @@ each method.
 
 ## What you do not write
 
-The shared tests already cover a new scheduler. `test_composition.py` picks it up from
-`registry.available()`, and the `contract` tests run on its stacks. A test of your own is only for
-what your batch system alone does, as in `tests/integration/test_slurm.py`.
+The shared tests already cover a new scheduler: the `contract` tests run on its stacks. A test of
+your own is only for what your batch system alone does, as in `tests/integration/test_slurm.py`, or
+for what its stacks never show (a state they never reach, a tool that fails), through the backend's
+public operations, as in `tests/unit/backends/batch/`.
