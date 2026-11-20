@@ -60,11 +60,6 @@ def check(
     Raises:
         SpecificationRejectedError: ``spec`` or a copy cannot be honoured.
     """
-    for index, copy in enumerate(copies):
-        if clashes := spec.clashes_with(copy):
-            raise SpecificationRejectedError(
-                f"copy {index}: secrets {sorted(clashes)} are named like inputs"
-            )
     # No data mover of its own: a batch system can only keep files for collection.
     for ref in spec.inputs:
         if "://" in ref.source:

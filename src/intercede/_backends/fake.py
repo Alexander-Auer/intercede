@@ -12,7 +12,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Self
 
-from intercede._backends.common import ACTIVE
+from intercede._backends.common import ACTIVE, copies_of
 from intercede._backends.config import FakeConfig
 from intercede.auth.protocols import CredentialProvider
 from intercede.exceptions import (
@@ -137,12 +137,7 @@ class FakeBackend:
     ) -> Submission:
         self._check_usable()
         self._check_supported(spec)
-        copy_vars = [CopyVars()] * copies if isinstance(copies, int) else list(copies)
-        for index, copy in enumerate(copy_vars):
-            if clashes := spec.clashes_with(copy):
-                raise SpecificationRejectedError(
-                    f"copy {index}: secrets {sorted(clashes)} are named like inputs"
-                )
+        copy_vars = copies_of(spec, copies)
 
         # File ownership: read local inputs now, so the backend never depends on
         # caller-owned paths after submit() returns.

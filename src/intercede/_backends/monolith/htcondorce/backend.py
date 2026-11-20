@@ -15,7 +15,7 @@ from typing import Any, Self
 
 from intercede._backends._htcondor import status
 from intercede._backends._htcondor.submit import SubmitPlan, render
-from intercede._backends.common import ACTIVE
+from intercede._backends.common import ACTIVE, copies_of
 from intercede._backends.credentials import credential_requirements, refresh_if_stale
 from intercede._backends.monolith.htcondorce import collect, staging
 from intercede._backends.monolith.htcondorce.process import Runner, run_process
@@ -27,7 +27,7 @@ from intercede._backends.monolith.htcondorce.session import (
 from intercede.auth.models import BearerToken
 from intercede.auth.protocols import CredentialProvider
 from intercede.config import HTCondorCEConfig
-from intercede.exceptions import InterCEdeError, SpecificationRejectedError
+from intercede.exceptions import InterCEdeError
 from intercede.models import (
     CopyVars,
     JobHandle,
@@ -130,15 +130,9 @@ class HTCondorCEBackend:
         self, spec: SubmissionSpec, copies: int | Sequence[CopyVars] = 1
     ) -> Submission:
         self._check_usable()
-        copy_vars = [CopyVars()] * copies if isinstance(copies, int) else list(copies)
+        copy_vars = copies_of(spec, copies)
         if not copy_vars:
             return Submission(handles={})
-        for index, copy in enumerate(copy_vars):
-            # A secret and an input would be staged to the same file.
-            if clashes := spec.clashes_with(copy):
-                raise SpecificationRejectedError(
-                    f"copy {index}: secrets {sorted(clashes)} are named like inputs"
-                )
         outputs, remaps = staging.outputs(spec)
         executable, ship, arguments = staging.command(
             spec, self._settings.container_launcher, self.resource

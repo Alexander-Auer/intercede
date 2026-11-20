@@ -32,7 +32,7 @@ from intercede._backends.batch.protocols import (
     SchedulerStatusMap,
     Transport,
 )
-from intercede._backends.common import ACTIVE
+from intercede._backends.common import ACTIVE, copies_of
 from intercede.config import BatchLocalConfig, BatchSSHConfig
 from intercede.exceptions import (
     ConfigurationError,
@@ -130,7 +130,7 @@ class BatchBackend:
         self, spec: SubmissionSpec, copies: int | Sequence[CopyVars] = 1
     ) -> Submission:
         self._check_usable()
-        copy_vars = [CopyVars()] * copies if isinstance(copies, int) else list(copies)
+        copy_vars = copies_of(spec, copies)
         if not copy_vars:
             return Submission(handles={})
         launcher = self._settings.container_launcher
