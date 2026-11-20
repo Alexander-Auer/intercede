@@ -1,0 +1,43 @@
+# The `arc-slurm` stack: an ARC CE in front of a one-machine Slurm cluster.
+# Rules: docs/dev/reference/integration-stacks.md
+# The harness drives the service named `backend`: A-REX's REST interface, on localhost:8443.
+services:
+  backend:
+    # Until CI publishes images (#14): ghcr.io/diracgrid/intercede-testenv/arc:<version>.
+    image: intercede-testenv/arc:${BACKEND_VERSION:-latest}
+    build:
+      context: ../_images/arc
+    hostname: backend
+    # slurmd's cgroup plugin must create cgroups and move itself into them, and Slurm 22.05 has no
+    # way to turn it off. A writable /sys/fs/cgroup with CAP_SYS_ADMIN is not enough.
+    privileged: true
+    cgroup: private
+    networks:
+      - stack
+    ports:
+      # Host-run harness: the CE advertises https://localhost:8443/arex (config/basic/arc.conf), so
+      # the published port must be the same number. Not 443, which a laptop may use already.
+      - "127.0.0.1:8443:8443"
+    volumes:
+      # bind mount, not a named volume: the host-run harness must read the token and the CA
+      - ./credentials:/shared/credentials
+      # backend half of the configuration, next to its intercede-client.toml
+      - ./config/basic/arc.conf:/etc/arc.conf:ro
+      - ./config/basic/slurm.conf:/etc/slurm/slurm.conf:ro
+      - ./config/basic/cgroup.conf:/etc/slurm/cgroup.conf:ro
+    healthcheck:
+      # Ready when the node can take jobs and the REST interface lets the client's token in.
+      test:
+        - CMD-SHELL
+        - >-
+          sinfo --noheader --format=%T | grep -qE '^(idle|mixed|allocated)$' &&
+          curl -sf --cacert /shared/credentials/arc-slurm/ca.pem
+          -H "Authorization: Bearer $$(cat /shared/credentials/arc-slurm/token)"
+          https://localhost:8443/arex/rest/1.1/info -o /dev/null
+      interval: 5s
+      timeout: 10s
+      retries: 36
+      start_period: 60s
+
+networks:
+  stack: {}
