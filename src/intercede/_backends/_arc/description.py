@@ -9,6 +9,11 @@ writer instead of being quoted by hand. A description names the files the
 client uploads, never their content: secrets reach the job's session directory
 by upload, not through the description.
 
+ARC's job script, which starts the executable on the worker, still runs each
+argument through the shell: a "$" or a backtick in one would be expanded. It
+also drops line breaks, from arguments and variables alike. Nothing written in
+a description keeps such values as they are, so they are refused.
+
 A description only says what to run and where its files go. It sets no
 policy on the job's lifetime: no holds, no automatic removal, no retries.
 """
@@ -26,7 +31,12 @@ ADL_NAMESPACE = "http://www.eu-emi.eu/es/2010/12/adl"
 _ENVIRONMENT_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # Characters XML 1.0 cannot hold. A carriage return is refused as well: an XML
 # parser turns it into a line feed, so it would not arrive as written.
-_NOT_IN_XML = re.compile("[^\t\n\x20-퟿-�\U00010000-\U0010ffff]")
+_NOT_IN_XML = re.compile(r"[^\t\n\x20-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]")
+
+# What ARC's job script changes in an argument, whatever the description says
+# (ARC 7.2): it expands "$" and backticks, and drops line breaks. It escapes
+# quotes and backslashes itself, so no escaping here could keep these.
+_EXPANDED = re.compile(r"[$`\n]")
 
 _BYTES_PER_MB = 2**20
 
@@ -107,6 +117,11 @@ def _application(plan: JobPlan) -> ElementTree.Element:
     executable = _child(application, "Executable")
     _child(executable, "Path", plan.executable)
     for argument in plan.arguments:
+        if match := _EXPANDED.search(argument):
+            raise ValueError(
+                f"an argument cannot hold {match.group()!r}: "
+                "ARC's job script would expand or drop it"
+            )
         _child(executable, "Argument", argument)
 
     _child(application, "Output", plan.stdout)
@@ -115,6 +130,10 @@ def _application(plan: JobPlan) -> ElementTree.Element:
     for name, value in sorted(plan.environment.items()):
         if not _ENVIRONMENT_NAME.fullmatch(name):
             raise ValueError(f"{name!r} is not a valid environment variable name")
+        if "\n" in value:
+            raise ValueError(
+                f"variable {name!r} cannot hold a line break: ARC's job script drops it"
+            )
         variable = _child(application, "Environment")
         _child(variable, "Name", name)
         _child(variable, "Value", value)
@@ -147,10 +166,8 @@ def _resources(plan: JobPlan) -> ElementTree.Element:
 def _data_staging(plan: JobPlan) -> ElementTree.Element:
     staging = ElementTree.Element("DataStaging")
 
-    # Tells ARC to wait for the files the client uploads before it starts the job.
-    if any(input_file.source is None for input_file in plan.inputs):
-        _child(staging, "ClientDataPush", "true")
-
+    # ARC starts the job once every input without a source has been uploaded.
+    # Not ClientDataPush: with it, A-REX waits for a signal REST cannot send.
     for input_file in plan.inputs:
         _input_file(staging, input_file)
 

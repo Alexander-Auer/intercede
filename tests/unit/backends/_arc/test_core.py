@@ -1,8 +1,9 @@
 """The shared ARC knowledge: job descriptions, the REST interface and the state mapping.
 
-The descriptions were checked against ARC 7.2: its own job description parser
-reads every value asserted here back as written, and gives the batch system
-the memory, wall time and slots expected.
+The descriptions were checked against ARC 7.2, in the arc-slurm stack: a job
+gets every value asserted here as written, and the batch system the memory,
+wall time and slots expected. Its job script expands "$" and backticks in an
+argument and drops line breaks, which is why those are refused.
 """
 
 from __future__ import annotations
@@ -82,12 +83,12 @@ class TestRender:
         "value",
         [
             "  edge  ",
-            'it\'s "q" & $HOME <x>',
-            "$(DOLLAR) `date` ;rm",
-            "two\nlines",
+            'it\'s "q" & <x>',
+            "back\\slash ;rm * ~ !x | %s",
+            "tab\there",
             "ünï",
         ],
-        ids=["spaces", "quotes-and-markup", "shell-and-macros", "line-feed", "unicode"],
+        ids=["spaces", "quotes-and-markup", "shell-and-backslash", "tab", "unicode"],
     )
     def test_values_arrive_as_written(self, value: str):
         root = parse(arguments=[value], environment={"X": value})
@@ -104,6 +105,26 @@ class TestRender:
             render([plan(arguments=[value])])
         with pytest.raises(ValueError, match="cannot be written"):
             render([plan(environment={"X": value})])
+
+    @pytest.mark.parametrize(
+        "value",
+        ["$HOME", "${HOME}", "$(id)", "`id`", "two\nlines"],
+        ids=["variable", "braces", "command", "backticks", "line-feed"],
+    )
+    def test_what_the_job_script_would_change_in_an_argument_is_refused(
+        self, value: str
+    ):
+        with pytest.raises(ValueError, match="job script would expand or drop it"):
+            render([plan(arguments=["safe", value])])
+
+    def test_a_variable_keeps_a_dollar_but_not_a_line_break(self):
+        # The job script leaves variables alone, except for line breaks.
+        root = parse(environment={"X": "$HOME `id` $(id)"})
+        assert texts(root, "adl:Application/adl:Environment/adl:Value") == [
+            "$HOME `id` $(id)"
+        ]
+        with pytest.raises(ValueError, match="cannot hold a line break"):
+            render([plan(environment={"X": "two\nlines"})])
 
     def test_environment_is_sorted_by_name(self):
         root = parse(environment={"B": "2", "A": "1"})
@@ -135,7 +156,9 @@ class TestRender:
         root = parse(
             inputs=[InputFile("payload.sh", executable=True), InputFile("secrets/t")]
         )
-        assert texts(root, "adl:DataStaging/adl:ClientDataPush") == ["true"]
+        # ARC starts the job once these are uploaded. With ClientDataPush it
+        # would wait for a signal its REST interface cannot send.
+        assert root.findall(".//adl:ClientDataPush", NS) == []
         files = root.findall("adl:DataStaging/adl:InputFile", NS)
         assert [texts(f, "adl:Name") for f in files] == [["payload.sh"], ["secrets/t"]]
         assert [texts(f, "adl:IsExecutable") for f in files] == [["true"], []]
@@ -146,8 +169,6 @@ class TestRender:
             executable="/bin/true",
             inputs=[InputFile("in.dat", "https://example.org/in.dat")],
         )
-        # Nothing to upload, so ARC need not wait for the client.
-        assert texts(root, "adl:DataStaging/adl:ClientDataPush") == []
         assert texts(root, "adl:DataStaging/adl:InputFile/adl:Source/adl:URI") == [
             "https://example.org/in.dat"
         ]

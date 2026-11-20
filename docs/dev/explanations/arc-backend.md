@@ -22,11 +22,16 @@ arrives, and its `MockTransport` lets the unit tests play an ARC CE without a ne
 
 ARC reads both. xRSL is what DIRAC writes, but it is a text format with its own quoting, which is
 the kind of quoting the HTCondor submit description needs by hand. ADL is XML: ElementTree escapes
-every value, so an argument or a variable arrives as written, whatever it holds. Only what XML
-cannot carry at all, such as control characters, is refused.
+every value, and ARC reads it back exactly. What XML cannot carry at all, such as control
+characters, is refused.
 
-The descriptions were checked against ARC 7.2's own parser: it reads back every value as written,
-and hands the batch system the memory, wall time and slots that were asked for.
+The job script ARC writes on the worker is less careful. Tested on ARC 7.2, it passes each argument
+through the shell inside double quotes: it escapes quotes and backslashes, but a `$` or a backtick
+is expanded, so an argument could run a command. It also drops line breaks, from arguments and
+variables. No escaping in the description can prevent that, so such values are refused at submit.
+Variables keep a `$` as it is.
+
+Memory, wall time and slots reach the batch system as asked.
 
 ## One job per copy, in one request
 
@@ -35,7 +40,10 @@ all of them go to the CE in one request. ARC answers per description, so a copy 
 shows up in `Submission.failures` while the others are submitted.
 
 A copy's secrets are not in its description. They are uploaded to the job's session directory after
-the job is created, as the executable and local inputs are. URL inputs and outputs are written in
+the job is created, as the executable and local inputs are, and arrive with mode 0600. ARC starts
+the job once all of them are there. The description does not set `ClientDataPush`: with it, A-REX
+waits for a signal from the client that its REST interface has no way to send, and the job never
+starts. URL inputs and outputs are written in
 the description, and ARC moves them itself. An upload to a URL is marked mandatory, so a failed
 upload fails the job instead of leaving it done without its file.
 
