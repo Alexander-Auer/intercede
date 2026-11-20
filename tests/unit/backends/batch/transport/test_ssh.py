@@ -1,6 +1,9 @@
-"""What only the SSH transport does: one connection, logging in, host keys, the jump host.
+"""What only the SSH transport does, and a stack does not show.
 
-What every transport does is in ``test_conformance.py``, which runs over SSH too.
+What every transport does is in ``test_conformance.py``, which runs over SSH too,
+and on every stack reached over SSH; logging in with a key, a rejected key and a
+host that is down are the shared suite's. These tests are for failures and kinds of
+login a stack does not produce, against an SSH server in the test process.
 """
 
 from __future__ import annotations
@@ -27,7 +30,6 @@ from intercede.exceptions import AuthenticationError, ResourceUnavailableError
 from ._sshd import HOST, SSHD, USER
 
 TIMEOUT = 30  # seconds
-CLOSED_PORT = 1  # nothing listens there, so connecting is refused at once
 OPENSSH_MAX_SESSIONS = 10  # sshd's default; the transport must stay within it
 PASSPHRASE = "open sesame"  # noqa: S105  (the test key's)
 WRONG = "hunter2"  # noqa: S105  (neither the password nor the passphrase)
@@ -58,27 +60,6 @@ async def ssh(sshd: SSHD) -> AsyncIterator[SSHTransport]:
 
 
 class TestConnection:
-    async def test_building_and_entering_neither_connect_nor_ask_for_credentials(
-        self, sshd: SSHD
-    ):
-        # No credentials at all: asking the provider would fail.
-        async with transport(sshd.config(port=CLOSED_PORT)):
-            pass
-
-    async def test_an_unreachable_host_is_unavailable(self, sshd: SSHD):
-        async with transport(sshd.config(port=CLOSED_PORT), sshd.key()) as ssh:
-            with pytest.raises(ResourceUnavailableError, match="failed"):
-                await echo(ssh)
-
-    async def test_one_connection_serves_every_call(
-        self, ssh: SSHTransport, sshd: SSHD, here: Path
-    ):
-        (here / "file").write_text("x")
-        await asyncio.gather(*(echo(ssh, str(n)) for n in range(20)))
-        await ssh.put(here / "file", "file", timeout=TIMEOUT)
-        await ssh.get("file", here / "back", timeout=TIMEOUT)
-        assert sshd.logins == 1
-
     async def test_commands_beyond_the_session_limit_wait_their_turn(
         self, ssh: SSHTransport, sshd: SSHD
     ):
@@ -126,31 +107,8 @@ class TestConnection:
             await running
         await eventually(lambda: sshd.signals == ["KILL"])
 
-    async def test_closing_disconnects(self, sshd: SSHD):
-        async with transport(sshd.config(), sshd.key()) as ssh:
-            await echo(ssh)
-            assert sshd.connected == 1
-        await eventually(lambda: sshd.connected == 0)
-
 
 class TestLogin:
-    @pytest.mark.parametrize(
-        ("auth", "kind"), [("key", "SSHPrivateKey"), ("password", "SSHPassword")]
-    )
-    async def test_a_provider_without_the_credential_is_refused(
-        self, sshd: SSHD, auth: str, kind: str
-    ):
-        async with transport(sshd.config(auth=auth)) as ssh:
-            with pytest.raises(AuthenticationError, match=f"no {kind} for dirac@"):
-                await echo(ssh)
-        assert sshd.logins == 0
-
-    async def test_only_the_configured_kind_is_used(self, sshd: SSHD):
-        # A provider may hold several kinds; a transport only gets the one it asks for.
-        config = sshd.config(auth="password")
-        async with transport(config, sshd.key(), sshd.password()) as ssh:
-            assert await echo(ssh) == "ok\n"
-
     async def test_with_a_password(self, sshd: SSHD):
         async with transport(sshd.config(auth="password"), sshd.password()) as ssh:
             assert await echo(ssh) == "ok\n"
@@ -163,13 +121,6 @@ class TestLogin:
     async def test_a_wrong_password_is_rejected(self, sshd: SSHD):
         wrong = SSHPassword(value=WRONG)
         async with transport(sshd.config(auth="password"), wrong) as ssh:
-            with pytest.raises(AuthenticationError, match="rejected the credentials"):
-                await echo(ssh)
-
-    async def test_a_key_that_is_not_authorized_is_rejected(self, sshd: SSHD):
-        other = asyncssh.generate_private_key("ssh-ed25519")
-        key = SSHPrivateKey(pem=other.export_private_key())
-        async with transport(sshd.config(), key) as ssh:
             with pytest.raises(AuthenticationError, match="rejected the credentials"):
                 await echo(ssh)
 
