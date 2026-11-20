@@ -40,6 +40,13 @@ AUTH_KINDS: dict[str, type[Credential]] = {
 # to change it is still open.
 DEFAULT_MARGIN = timedelta(minutes=5)
 
+# Token scopes per operation (WLCG token profile), for the backends that ask
+# for a token per operation: a status poller carries a read scope and nothing
+# that would let it submit.
+SUBMIT_SCOPES = frozenset({"compute.create"})
+READ_SCOPES = frozenset({"compute.read"})
+CANCEL_SCOPES = frozenset({"compute.cancel"})
+
 
 def credential_requirements(
     config: BackendConfig, scopes: frozenset[str] = frozenset()

@@ -16,7 +16,13 @@ from typing import Any, Self
 from intercede._backends._htcondor import status
 from intercede._backends._htcondor.submit import SubmitPlan, render
 from intercede._backends.common import ACTIVE, copies_of
-from intercede._backends.credentials import credential_requirements, refresh_if_stale
+from intercede._backends.credentials import (
+    CANCEL_SCOPES,
+    READ_SCOPES,
+    SUBMIT_SCOPES,
+    CredentialCache,
+    credential_requirements,
+)
 from intercede._backends.monolith.htcondorce import collect, staging
 from intercede._backends.monolith.htcondorce.process import Runner, run_process
 from intercede._backends.monolith.htcondorce.session import (
@@ -45,12 +51,6 @@ BACKEND = "htcondor-ce"
 DEFAULT_PORT = 9619
 PARALLEL_TRANSFERS = 4
 
-# Token scopes per operation (WLCG token profile), so a status poller carries
-# a read scope and nothing that would let it submit.
-SUBMIT_SCOPES = frozenset({"compute.create"})
-READ_SCOPES = frozenset({"compute.read"})
-CANCEL_SCOPES = frozenset({"compute.cancel"})
-
 _JOB_ID = re.compile(r"^\d+\.\d+$")
 # Attributes get_output() needs on top of the state.
 _OUTPUT_ATTRIBUTES = (*status.STATE_ATTRIBUTES, "Out", "Err", "UserLog", "SUBMIT_Iwd")
@@ -72,14 +72,13 @@ class HTCondorCEBackend:
     ) -> None:
         # Construction is cheap and does no I/O.
         self._settings = settings
-        self._provider = credentials
+        self._credentials = CredentialCache(credentials)  # a token per scope set
         self._run = runner
         self._workdir = workdir or staging.default_workdir()
         self._host, port = split_endpoint(settings.endpoint)
         self._pool = f"{self._host}:{port}"
         # The CE's schedd is named after its host unless the site says otherwise.
         self._name = settings.schedd or self._host
-        self._tokens: dict[frozenset[str], BearerToken] = {}  # per scope set
         # Only jobs being collected right now: a lock disappears with its last
         # user, so the backend keeps no record of the jobs it has seen.
         self._collecting: weakref.WeakValueDictionary[JobID, asyncio.Lock] = (
@@ -122,7 +121,7 @@ class HTCondorCEBackend:
     ) -> None:
         # Idempotent. Cached tokens are dropped; they were never written anywhere.
         self._closed = True
-        self._tokens.clear()
+        self._credentials.clear()
 
     # -- Submitter ---------------------------------------------------------
 
@@ -345,12 +344,9 @@ class HTCondorCEBackend:
     async def _fresh(self, scopes: frozenset[str]) -> BearerToken:
         requirements = credential_requirements(self._settings, scopes)
         assert requirements is not None  # an HTCondor-CE always asks for a token
-        fresh = await refresh_if_stale(
-            self._tokens.get(scopes), requirements, self._provider
-        )
-        assert isinstance(fresh, BearerToken)  # refresh_if_stale checked the kind
-        self._tokens[scopes] = fresh
-        return fresh
+        token = await self._credentials.fresh(requirements)
+        assert isinstance(token, BearerToken)  # the cache checked the kind
+        return token
 
     async def _ads(
         self, ids: Sequence[JobID], attributes: Sequence[str], *, history: bool
