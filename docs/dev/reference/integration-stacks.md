@@ -102,7 +102,8 @@ Review checks these rules. `test_manifest.py` checks the file layout.
 9. **The host can reach it** (only when `exec_in_container` is `false`). Publish the backend port
    on `localhost` (compose `ports:`) and put the same `host:port` in `intercede-client.toml`. A
    TLS certificate must be valid for the name the client uses: create it for both the compose
-   hostname and `localhost`. ARC on EL9 also needs the crypto policy set to `LEGACY`.
+   hostname and `localhost`. Its CA needs the `keyUsage` extension: Python 3.13 and later refuse
+   a CA without it, such as the one `arcctl test-ca` makes.
 
 ## pytest options and fixtures
 
@@ -134,3 +135,6 @@ Markers, defined in `pyproject.toml`: `contract`, `remote`, `scheduler`, `arc`, 
 Tests marked `contract` are the shared suite and run on every stack: with `--stack`, they get the
 markers that the stack's `markers` expression asks for, so `-m "<markers>"` selects them. The
 other markers select tests for behaviour only some backends have.
+
+A stack can land before its backend. Until the registry has a backend for the stack's `kind`, the
+shared suite is skipped on it, with the reason, and only the stack's own tests run.

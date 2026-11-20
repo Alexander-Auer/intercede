@@ -60,6 +60,20 @@ def required_markers(expression: str) -> set[str]:
     }
 
 
+@pytest.fixture(autouse=True)
+def _backend_provided(request: pytest.FixtureRequest) -> None:
+    """Skip the shared suite on a stack whose backend this version does not provide yet.
+
+    A stack can land before its backend, in a pull request of its own: its own
+    tests run, and the shared suite runs once the registry has the backend.
+    """
+    if request.node.get_closest_marker("contract") is None:
+        return
+    kind = request.getfixturevalue("client_config")["backend"]["kind"]
+    if kind not in registry.available()["backend"]:
+        pytest.skip(f"interCEde provides no {kind!r} backend yet")
+
+
 @pytest.fixture(scope="session")
 def stack(request: pytest.FixtureRequest) -> dict[str, Any]:
     """Return the stacks.yml entry selected by --stack; skip the test when none is given."""
