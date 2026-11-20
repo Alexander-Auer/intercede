@@ -74,6 +74,26 @@ def _backend_provided(request: pytest.FixtureRequest) -> None:
         pytest.skip(f"interCEde provides no {kind!r} backend yet")
 
 
+@pytest.fixture(autouse=True)
+def _trust_the_stack(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Trust the CA a TLS stack made at start, as a grid host trusts its CAs.
+
+    A stack that serves TLS writes its CA, in the ``X509_CERT_DIR`` layout, to
+    ``certificates/`` in its credentials folder; a backend finds it there
+    through ``X509_CERT_DIR``.
+    """
+    if "client_config" not in request.fixturenames:
+        return
+    config = request.getfixturevalue("client_config")
+    if "credentials" not in config:
+        return
+    folder = request.getfixturevalue("stack_dir") / config["credentials"]["path"]
+    if (folder / "certificates").is_dir():
+        monkeypatch.setenv("X509_CERT_DIR", str(folder / "certificates"))
+
+
 @pytest.fixture(scope="session")
 def stack(request: pytest.FixtureRequest) -> dict[str, Any]:
     """Return the stacks.yml entry selected by --stack; skip the test when none is given."""

@@ -103,7 +103,8 @@ Review checks these rules. `test_manifest.py` checks the file layout.
    on `localhost` (compose `ports:`) and put the same `host:port` in `intercede-client.toml`. A
    TLS certificate must be valid for the name the client uses: create it for both the compose
    hostname and `localhost`. Its CA needs the `keyUsage` extension: Python 3.13 and later refuse
-   a CA without it, such as the one `arcctl test-ca` makes.
+   a CA without it, such as the one `arcctl test-ca` makes. Write the CA in the `X509_CERT_DIR`
+   layout to `certificates/` in the credentials folder: the tests then set `X509_CERT_DIR` to it.
 
 ## pytest options and fixtures
 
