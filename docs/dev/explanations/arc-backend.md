@@ -41,7 +41,13 @@ shows up in `Submission.failures` while the others are submitted.
 
 A copy's secrets are not in its description. They are uploaded to the job's session directory after
 the job is created, as the executable and local inputs are, and arrive with mode 0600. ARC starts
-the job once all of them are there. The description does not set `ClientDataPush`: with it, A-REX
+the job once all of them are there. A job whose files do not all arrive would wait for them until
+the CE gives up on it, so the backend cancels it, and the copy is reported as failed.
+
+The session directory is the job's working directory, so the names the backend needs there are
+hidden: a local executable is uploaded as `.intercede-executable`, and the output streams default
+to `.intercede-stdout` and `.intercede-stderr`. An input or secret with one of these names is
+refused. The description does not set `ClientDataPush`: with it, A-REX
 waits for a signal from the client that its REST interface has no way to send, and the job never
 starts. URL inputs and outputs are written in
 the description, and ARC moves them itself. An upload to a URL is marked mandatory, so a failed
@@ -55,3 +61,25 @@ The mapping follows DIRAC's `AREXComputingElement`, with two differences:
 | --- | --- | --- | --- |
 | `HELD` | Running, meant to be killed | Waiting | The batch system holds the job and can release it; the same job through the Slurm backend is waiting. Killing it is the consumer's policy. |
 | `WIPED` | Aborted | Unknown | ARC removed the job's files, and with them how the job ended. |
+
+## Tokens and connections
+
+Every request carries a bearer token with the scopes of its operation, as the WLCG token profile
+assigns them: `compute.read` for status, `compute.cancel` to cancel. Submitting is two actions to
+ARC, creating the jobs and writing their files, so its token has `compute.create` and
+`compute.modify`.
+
+A-REX decides who a connection belongs to at its first request. Tested on ARC 7.2: when that request
+is refused, or carries no token, even to a public path, every later request on the same connection
+is refused too, whatever its token. So every request carries a token, and after a refusal the
+backend drops its connections: the next request opens a new one.
+
+ARC refuses a token with HTTP status 500 and the reason "User can't be assigned configuration", not
+with 401. The backend reads that, 401 and 403 as an `AuthenticationError`. Any other failed request
+is a `ResourceUnavailableError`.
+
+## Trusting the CE
+
+A CE's host certificate is usually signed by a grid CA, which the system does not know. The backend
+trusts the system's CAs, and also those in `X509_CERT_DIR` when it is set, as other grid clients
+do. Grid hosts keep them in `/etc/grid-security/certificates`.
