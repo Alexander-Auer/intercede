@@ -15,7 +15,12 @@ from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 
 from intercede._backends._htcondor.submit import CopyPlan
-from intercede._backends.common import is_url, read_input
+from intercede._backends.common import (
+    check_container,
+    container_command,
+    is_url,
+    read_input,
+)
 from intercede.exceptions import ConfigurationError, SpecificationRejectedError
 from intercede.models import CopyVars, SubmissionSpec
 
@@ -126,27 +131,13 @@ def command(
     A file on this host is shipped; anything else is a command on the worker.
     A container image is run through the configured launcher.
     """
-    executable = spec.executable
-    arguments = list(spec.arguments)
-    is_local_file = Path(spec.executable).is_file()
+    check_container(spec, launcher, resource)
 
-    if spec.container is None:
-        return executable, is_local_file, arguments
+    if spec.container is None or launcher is None:
+        return spec.executable, Path(spec.executable).is_file(), list(spec.arguments)
 
-    if launcher is None:
-        raise SpecificationRejectedError(
-            f"{resource} has no container_launcher configured, so it cannot run "
-            f"{spec.container.image!r}"
-        )
-
-    if is_local_file:
-        raise SpecificationRejectedError(
-            "a container job runs a command inside the image, not a local file"
-        )
-
-    launcher_args = [arg.replace("{image}", spec.container.image) for arg in launcher]
-
-    return (launcher_args[0], False, [*launcher_args[1:], executable, *arguments])
+    argv = container_command(spec, launcher)
+    return argv[0], False, argv[1:]
 
 
 def outputs(spec: SubmissionSpec) -> tuple[list[str] | None, dict[str, str]]:

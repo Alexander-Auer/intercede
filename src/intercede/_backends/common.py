@@ -58,3 +58,47 @@ def read_input(ref: FileRef) -> bytes:
         raise SpecificationRejectedError(
             f"input {ref.name!r}: cannot read {ref.source}: {exc.strerror}"
         ) from exc
+
+
+def check_container(
+    spec: SubmissionSpec, launcher: Sequence[str] | None, resource: str
+) -> None:
+    """Refuse a container image the resource cannot run, before anything is staged.
+
+    Args:
+        spec: What every copy shares.
+        launcher: The configured container launcher, if any.
+        resource: The resource, for the error messages.
+
+    Raises:
+        SpecificationRejectedError: The spec asks for an image but no launcher
+            is configured, or its executable is a file on this host: a
+            container job runs a command inside the image.
+    """
+    if spec.container is None:
+        return
+    if launcher is None:
+        raise SpecificationRejectedError(
+            f"{resource} has no container_launcher configured, so it cannot run "
+            f"{spec.container.image!r}"
+        )
+    if Path(spec.executable).is_file():
+        raise SpecificationRejectedError(
+            "a container job runs a command inside the image, not a local file"
+        )
+
+
+def container_command(spec: SubmissionSpec, launcher: Sequence[str]) -> list[str]:
+    """Return the argv that runs the executable inside the spec's image.
+
+    Args:
+        spec: A spec with a container image, accepted by ``check_container``.
+        launcher: The configured launcher; ``{image}`` is replaced by the image.
+
+    Returns:
+        The launcher, then the executable and its arguments.
+    """
+    assert spec.container is not None  # check_container() was called first
+    image = spec.container.image
+    start = [part.replace("{image}", image) for part in launcher]
+    return [*start, spec.executable, *spec.arguments]

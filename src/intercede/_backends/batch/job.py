@@ -18,7 +18,7 @@ from pathlib import Path, PurePosixPath
 from pydantic import BaseModel, ConfigDict
 
 from intercede._backends.batch import layout
-from intercede._backends.common import is_url
+from intercede._backends.common import check_container, container_command, is_url
 from intercede.exceptions import SpecificationRejectedError
 from intercede.models import CopyVars, SubmissionSpec, WorkdirName
 
@@ -72,16 +72,7 @@ def check(
             raise SpecificationRejectedError(
                 f"output {member.pattern!r}: {resource} cannot upload outputs to URLs"
             )
-    if spec.container is not None:
-        if launcher is None:
-            raise SpecificationRejectedError(
-                f"{resource} has no container_launcher configured, so it cannot run "
-                f"{spec.container.image!r}"
-            )
-        if Path(spec.executable).is_file():
-            raise SpecificationRejectedError(
-                "a container job runs a command inside the image, not a local file"
-            )
+    check_container(spec, launcher, resource)
     for environment in (spec.environment, *(copy.environment for copy in copies)):
         for name in environment:
             if not _VARIABLE.fullmatch(name):
@@ -215,17 +206,15 @@ def _exports(environment: Mapping[str, str]) -> list[str]:
 
 
 def _command(spec: SubmissionSpec, launcher: Sequence[str] | None) -> str:
+    if spec.container is not None and launcher is not None:
+        return " ".join(shlex.quote(part) for part in container_command(spec, launcher))
     executable = (
         f"{_UP}/{layout.EXECUTABLE}"
         if Path(spec.executable).is_file()
         else shlex.quote(spec.executable)
     )
     arguments = [shlex.quote(argument) for argument in spec.arguments]
-    if spec.container is None or launcher is None:
-        return " ".join([executable, *arguments])
-    image = spec.container.image
-    start = [shlex.quote(part.replace("{image}", image)) for part in launcher]
-    return " ".join([*start, executable, *arguments])
+    return " ".join([executable, *arguments])
 
 
 def _redirections(spec: SubmissionSpec) -> str:
