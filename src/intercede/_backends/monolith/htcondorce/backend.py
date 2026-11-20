@@ -15,6 +15,7 @@ from typing import Any, Self
 
 from intercede._backends._htcondor import status
 from intercede._backends._htcondor.submit import SubmitPlan, render
+from intercede._backends.common import ACTIVE
 from intercede._backends.credentials import credential_requirements, refresh_if_stale
 from intercede._backends.monolith.htcondorce import collect, staging
 from intercede._backends.monolith.htcondorce.process import Runner, run_process
@@ -50,7 +51,6 @@ SUBMIT_SCOPES = frozenset({"compute.create"})
 READ_SCOPES = frozenset({"compute.read"})
 CANCEL_SCOPES = frozenset({"compute.cancel"})
 
-_ACTIVE = frozenset({JobStatus.SUBMITTED, JobStatus.WAITING, JobStatus.RUNNING})
 _JOB_ID = re.compile(r"^\d+\.\d+$")
 # Attributes get_output() needs on top of the state.
 _OUTPUT_ATTRIBUTES = (*status.STATE_ATTRIBUTES, "Out", "Err", "UserLog", "SUBMIT_Iwd")
@@ -229,7 +229,7 @@ class HTCondorCEBackend:
                     else "unknown job"
                 )
                 results[handle] = OpOutcome[JobOutput](ok=False, reason=reason)
-            elif status.job_status(ad) in _ACTIVE:
+            elif status.job_status(ad) in ACTIVE:
                 results[handle] = OpOutcome[JobOutput](
                     ok=False, reason="job has not finished"
                 )
@@ -290,7 +290,7 @@ class HTCondorCEBackend:
         ads = await self._ads(ids, status.STATE_ATTRIBUTES, history=True)
         # Only active jobs are removed: removing a finished job would release
         # output that has not been collected yet. That is purge()'s job.
-        active = [i for i in ids if i in ads and status.job_status(ads[i]) in _ACTIVE]
+        active = [i for i in ids if i in ads and status.job_status(ads[i]) in ACTIVE]
         removed, reason = await self._remove(active)
         return {
             handle: self._outcome(

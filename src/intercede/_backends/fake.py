@@ -12,6 +12,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Self
 
+from intercede._backends.common import ACTIVE
 from intercede._backends.config import FakeConfig
 from intercede.auth.protocols import CredentialProvider
 from intercede.exceptions import (
@@ -42,7 +43,6 @@ from intercede.protocols import (
 )
 
 BACKEND = "fake"
-_ACTIVE = (JobStatus.SUBMITTED, JobStatus.WAITING, JobStatus.RUNNING)
 
 
 def _is_url(source: str) -> bool:
@@ -192,7 +192,7 @@ class FakeBackend:
             job, error = self._lookup(handle)
             if job is None:
                 results[handle] = OpOutcome[JobOutput](ok=False, reason=error)
-            elif job.status in _ACTIVE:
+            elif job.status in ACTIVE:
                 results[handle] = OpOutcome[JobOutput](
                     ok=False, reason="job has not finished"
                 )
@@ -209,7 +209,7 @@ class FakeBackend:
             job, error = self._lookup(handle)
             if job is None:
                 results[handle] = OpOutcome[None](ok=False, reason=error)
-            elif job.status in _ACTIVE:
+            elif job.status in ACTIVE:
                 job.status = JobStatus.ABORTED
                 results[handle] = OpOutcome[None](ok=True)
             else:
