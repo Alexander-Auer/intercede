@@ -1,4 +1,8 @@
-"""What ``kill`` and ``purge`` do, on every transport."""
+"""What ``kill`` and ``purge`` do that a Slurm stack does not show, on every transport.
+
+Killing and purging jobs are the shared suite's and ``test_slurm.py``'s. These are
+the failures of ``scancel``, and what a purge must leave alone.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +13,7 @@ from typing import Any
 import pytest
 
 from intercede.exceptions import ResourceUnavailableError
-from intercede.models import JobHandle, JobID, JobStatus, SubmissionSpec
+from intercede.models import JobHandle, SubmissionSpec
 
 from ._fake_slurm import FakeSlurm
 
@@ -26,57 +30,6 @@ def submission_dir(home: Path, handle: JobHandle) -> Path:
 
 
 class TestKill:
-    async def test_a_running_job_is_cancelled(
-        self, backend: Any, slurm: FakeSlurm, job_script: Script
-    ):
-        slurm.hold()
-        handle = (await submitted(backend, job_script()))[0]
-        slurm.run(handle.id)
-
-        outcome = (await backend.kill([handle]))[handle]
-
-        assert outcome.ok and outcome.reason is None
-        assert (await backend.get_status([handle]))[handle] == JobStatus.ABORTED
-
-    async def test_a_waiting_job_ends_up_aborted_too(
-        self, backend: Any, slurm: FakeSlurm, job_script: Script
-    ):
-        slurm.hold()
-        first, second = await submitted(backend, job_script(), copies=2)
-
-        assert (await backend.kill([first, second]))[first].ok
-
-        # Slurm drops it from its array: not in the queue, no row of its own.
-        statuses = await backend.get_status([first, second])
-        assert set(statuses.values()) == {JobStatus.ABORTED}
-
-    async def test_a_finished_job_is_left_alone(
-        self, backend: Any, slurm: FakeSlurm, job_script: Script
-    ):
-        handle = (await submitted(backend, job_script()))[0]
-
-        outcome = (await backend.kill([handle]))[handle]
-
-        assert outcome.ok and outcome.reason == "already finished"
-        assert not [call for call in slurm.calls if call[0] == "scancel"]
-        assert (await backend.get_status([handle]))[handle] == JobStatus.DONE
-
-    async def test_each_job_gets_its_own_outcome(
-        self, backend: Any, slurm: FakeSlurm, job_script: Script
-    ):
-        done = (await submitted(backend, job_script()))[0]
-        slurm.hold()
-        waiting = (await submitted(backend, job_script()))[0]
-        unknown = done.model_copy(update={"id": JobID("999_0")})
-        theirs = done.model_copy(update={"resource": "elsewhere"})
-
-        outcomes = await backend.kill([done, waiting, unknown, theirs])
-
-        assert outcomes[done].ok and outcomes[done].reason == "already finished"
-        assert outcomes[waiting].ok and outcomes[waiting].reason is None
-        assert not outcomes[unknown].ok and outcomes[unknown].reason == "unknown job"
-        assert not outcomes[theirs].ok and outcomes[theirs].reason == "unknown job"
-
     async def test_a_job_that_stays_active_reports_why(
         self, backend: Any, slurm: FakeSlurm, job_script: Script
     ):
@@ -109,29 +62,6 @@ class TestKill:
 
 
 class TestPurge:
-    async def test_a_finished_jobs_files_go_and_it_keeps_its_result(
-        self, backend: Any, home: Path, job_script: Script
-    ):
-        handle = (await submitted(backend, job_script()))[0]
-        assert submission_dir(home, handle).exists()
-
-        assert (await backend.purge([handle]))[handle].ok
-
-        assert not submission_dir(home, handle).exists()
-        assert (await backend.get_status([handle]))[handle] == JobStatus.DONE
-
-    async def test_an_active_job_is_cancelled_first(
-        self, backend: Any, slurm: FakeSlurm, home: Path, job_script: Script
-    ):
-        slurm.hold()
-        handle = (await submitted(backend, job_script()))[0]
-        slurm.run(handle.id)
-
-        assert (await backend.purge([handle]))[handle].ok
-
-        assert ["scancel", handle.id] in slurm.calls
-        assert not submission_dir(home, handle).exists()
-
     async def test_a_job_that_stays_active_keeps_its_files(
         self, backend: Any, slurm: FakeSlurm, home: Path, job_script: Script
     ):
@@ -158,11 +88,6 @@ class TestPurge:
 
         await backend.purge([second])
         assert not directory.exists()
-
-    async def test_purging_twice_is_harmless(self, backend: Any, job_script: Script):
-        handle = (await submitted(backend, job_script()))[0]
-        await backend.purge([handle])
-        assert (await backend.purge([handle]))[handle].ok
 
     async def test_a_handle_that_is_not_ours_touches_nothing(
         self, backend: Any, home: Path, job_script: Script
