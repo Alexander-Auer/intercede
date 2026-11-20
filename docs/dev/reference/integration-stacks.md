@@ -102,7 +102,8 @@ Review checks these rules. `test_manifest.py` checks the file layout.
 9. **The host can reach it** (only when `exec_in_container` is `false`). Publish the backend port
    on `localhost` (compose `ports:`) and put the same `host:port` in `intercede-client.toml`. A
    TLS certificate must be valid for the name the client uses: create it for both the compose
-   hostname and `localhost`. ARC on EL9 also needs the crypto policy set to `LEGACY`.
+   hostname and `localhost`. Its CA needs the `keyUsage` extension: Python 3.13 and later refuse
+   a CA without it, such as the one `arcctl test-ca` makes.
 
 ## pytest options and fixtures
 
