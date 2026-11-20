@@ -167,6 +167,14 @@ class TestRefused:
             ({**LOCAL, "workdir": "-rf"}, "workdir must be a path"),
             ({**SSH, "jump_host": "-oProxyCommand=x"}, "jump_host must be"),
             ({**SSH, "jump_host": "gw.example.org:22:22"}, "jump_host must be"),
+            (
+                {**ARC, "endpoint": "arc.example.org:443"},
+                "endpoint must be an https://",
+            ),
+            (
+                {**ARC, "endpoint": "http://arc.example.org/arex"},
+                "endpoint must be an https://",
+            ),
         ],
         ids=[
             "ssh-ce-auth",
@@ -180,6 +188,8 @@ class TestRefused:
             "workdir-option",
             "jump-host-option",
             "jump-host-two-ports",
+            "arc-endpoint-no-scheme",
+            "arc-endpoint-http",
         ],
     )
     def test_a_rule_of_the_kind(self, data: dict[str, Any], message: str):
