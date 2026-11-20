@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 from pydantic import BaseModel, ConfigDict
 
 from intercede._backends.batch import layout
+from intercede._backends.common import is_url
 from intercede.exceptions import SpecificationRejectedError
 from intercede.models import CopyVars, SubmissionSpec, WorkdirName
 
@@ -62,7 +63,7 @@ def check(
     """
     # No data mover of its own: a batch system can only keep files for collection.
     for ref in spec.inputs:
-        if "://" in ref.source:
+        if is_url(ref.source):
             raise SpecificationRejectedError(
                 f"input {ref.name!r}: {resource} cannot fetch inputs from URLs"
             )

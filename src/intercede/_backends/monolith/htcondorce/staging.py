@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 
 from intercede._backends._htcondor.submit import CopyPlan
+from intercede._backends.common import is_url, read_input
 from intercede.exceptions import ConfigurationError, SpecificationRejectedError
 from intercede.models import CopyVars, SubmissionSpec
 
@@ -62,7 +63,7 @@ def stage_inputs(spec: SubmissionSpec, submission: Path) -> list[str]:
     staged: list[str] = []
     common = submission / "inputs"
     for ref in spec.inputs:
-        if "://" in ref.source:
+        if is_url(ref.source):
             if PurePosixPath(ref.source.split("?")[0]).name != ref.name:
                 raise SpecificationRejectedError(
                     f"input {ref.name!r}: HTCondor names a URL input after the URL, "
@@ -72,14 +73,7 @@ def stage_inputs(spec: SubmissionSpec, submission: Path) -> list[str]:
             continue
         target = common / ref.name
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        # Read now: the caller may delete its file once submit() returns.
-        try:
-            content = Path(ref.source).read_bytes()
-        except OSError as exc:
-            raise SpecificationRejectedError(
-                f"input {ref.name!r}: cannot read {ref.source}: {exc.strerror}"
-            ) from exc
-        target.write_bytes(content)
+        target.write_bytes(read_input(ref))
     if common.exists():
         # Trailing slash: the directory's contents, keeping sub-directories.
         staged.append(f"{common}/")

@@ -12,7 +12,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Self
 
-from intercede._backends.common import ACTIVE, copies_of
+from intercede._backends.common import ACTIVE, copies_of, is_url, read_input
 from intercede._backends.config import FakeConfig
 from intercede.auth.protocols import CredentialProvider
 from intercede.exceptions import (
@@ -43,10 +43,6 @@ from intercede.protocols import (
 )
 
 BACKEND = "fake"
-
-
-def _is_url(source: str) -> bool:
-    return "://" in source
 
 
 @dataclass
@@ -276,7 +272,7 @@ class FakeBackend:
 
     def _check_can_fetch(self, inputs: Sequence[FileRef]) -> None:
         for ref in inputs:
-            if _is_url(ref.source):
+            if is_url(ref.source):
                 raise SpecificationRejectedError(
                     f"{self.resource} cannot fetch inputs from URLs"
                 )
@@ -306,13 +302,8 @@ class FakeBackend:
     def _read_local_inputs(inputs: Sequence[FileRef]) -> dict[str, bytes]:
         contents: dict[str, bytes] = {}
         for ref in inputs:
-            if not _is_url(ref.source):
-                try:
-                    contents[ref.name] = Path(ref.source).read_bytes()
-                except OSError as exc:
-                    raise SpecificationRejectedError(
-                        f"input {ref.name!r}: cannot read {ref.source}: {exc.strerror}"
-                    ) from exc
+            if not is_url(ref.source):
+                contents[ref.name] = read_input(ref)
         return contents
 
     @staticmethod
