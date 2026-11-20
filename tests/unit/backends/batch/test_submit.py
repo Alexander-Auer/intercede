@@ -1,4 +1,8 @@
-"""What ``submit`` does, on every transport."""
+"""What ``submit`` does that a Slurm stack does not show, on every transport.
+
+What a job receives is the shared suite's, on the Slurm stacks. These are the
+refusals, the failures, and what must stay private on the resource.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +21,6 @@ from intercede.models import (
     CopyVars,
     FileRef,
     JobHandle,
-    JobStatus,
     OutputMember,
     OutputSpec,
     Resources,
@@ -48,110 +51,7 @@ def directory(home: Path, handle: JobHandle) -> Path:
     )
 
 
-class TestHandles:
-    async def test_one_handle_per_copy_from_one_array(
-        self, backend: Any, slurm: FakeSlurm, job_script: Script
-    ):
-        submission = await backend.submit(
-            SubmissionSpec(executable=job_script()), copies=3
-        )
-        assert submission.failures == {}
-        assert [submission.handles[i].id for i in range(3)] == ["1_0", "1_1", "1_2"]
-        assert [call[0] for call in slurm.calls] == ["sbatch"]  # not one per copy
-
-    async def test_a_handle_names_the_backend_and_resource(
-        self, backend: Any, job_script: Script
-    ):
-        handle = single(await backend.submit(SubmissionSpec(executable=job_script())))
-        assert handle.backend == "batch"
-        assert handle.resource == backend.resource
-
-    async def test_a_handle_survives_being_stored(
-        self, backend: Any, job_script: Script
-    ):
-        handle = single(await backend.submit(SubmissionSpec(executable=job_script())))
-        stored = JobHandle.model_validate_json(handle.model_dump_json())
-        assert (await backend.get_status([stored]))[stored] == JobStatus.DONE
-
-    async def test_no_copies_submit_nothing(
-        self, backend: Any, slurm: FakeSlurm, job_script: Script
-    ):
-        submission = await backend.submit(SubmissionSpec(executable=job_script()), [])
-        assert submission.handles == {}
-        assert slurm.calls == []
-
-
-class TestWhatAJobGets:
-    async def test_the_program_and_its_arguments_arrive_exactly(
-        self, backend: Any, home: Path, job_script: Script
-    ):
-        awkward = ["two words", "it's", "$HOME", "*", "", "a\nb"]
-        spec = SubmissionSpec(
-            executable=job_script('for a in "$@"; do echo "[$a]"; done'),
-            arguments=awkward,
-        )
-        handle = single(await backend.submit(spec))
-        assert stream(home, handle) == "".join(f"[{arg}]\n" for arg in awkward)
-
-    async def test_a_command_on_the_resource_is_not_shipped(
-        self, backend: Any, home: Path
-    ):
-        spec = SubmissionSpec(executable="echo", arguments=["from", "the worker"])
-        handle = single(await backend.submit(spec))
-        assert stream(home, handle) == "from the worker\n"
-        assert not (directory(home, handle).parents[1] / "executable").exists()
-
-    async def test_a_script_runs_without_its_execute_bit(
-        self, backend: Any, home: Path, tmp_path: Path
-    ):
-        script = tmp_path / "plain.sh"
-        script.write_text("#!/bin/sh\necho ran\n")
-        script.chmod(0o644)
-        handle = single(await backend.submit(SubmissionSpec(executable=str(script))))
-        assert stream(home, handle) == "ran\n"
-
-    async def test_each_copy_has_its_own_environment_over_the_shared_one(
-        self, backend: Any, home: Path, job_script: Script
-    ):
-        spec = SubmissionSpec(
-            executable=job_script('echo "$SHARED $WHO ${ONLY_FIRST-unset}"'),
-            environment={"SHARED": "both", "WHO": "nobody"},
-        )
-        copies = [
-            CopyVars(environment={"WHO": "it's me", "ONLY_FIRST": "yes"}),
-            CopyVars(environment={"WHO": "$HOME"}),
-            CopyVars(),
-        ]
-        submission = await backend.submit(spec, copies)
-        assert [stream(home, h) for h in submission.handles.values()] == [
-            "both it's me yes\n",
-            "both $HOME unset\n",
-            "both nobody unset\n",
-        ]
-
-    async def test_each_copy_starts_in_its_own_directory_with_the_inputs(
-        self, backend: Any, home: Path, tmp_path: Path, job_script: Script
-    ):
-        (tmp_path / "data.txt").write_text("shared")
-        spec = SubmissionSpec(
-            executable=job_script("cat sub/data.txt; echo; echo mine >> sub/data.txt"),
-            inputs=[FileRef(name="sub/data.txt", source=str(tmp_path / "data.txt"))],
-        )
-        submission = await backend.submit(spec, copies=2)
-        for handle in submission.handles.values():
-            assert stream(home, handle) == "shared\n"  # not what the other wrote
-
-    async def test_a_secret_is_only_its_copys_and_private(
-        self, backend: Any, home: Path, job_script: Script
-    ):
-        spec = SubmissionSpec(executable=job_script("cat key; stat -c %a key"))
-        copies = [CopyVars(secrets={"key": b"a\n"}), CopyVars(secrets={"key": b"b\n"})]
-        submission = await backend.submit(spec, copies)
-        assert [stream(home, h) for h in submission.handles.values()] == [
-            "a\n600\n",
-            "b\n600\n",
-        ]
-
+class TestSecretsAndResources:
     async def test_no_secret_is_in_what_the_scheduler_or_runner_can_read(
         self, backend: Any, home: Path, job_script: Script
     ):
@@ -171,30 +71,6 @@ class TestWhatAJobGets:
         handle = single(await backend.submit(SubmissionSpec(executable=job_script())))
         submission = directory(home, handle).parents[1]
         assert submission.stat().st_mode & 0o077 == 0
-
-    async def test_named_streams_land_in_the_working_directory(
-        self, backend: Any, home: Path, job_script: Script
-    ):
-        spec = SubmissionSpec(
-            executable=job_script("echo out; echo err >&2"),
-            stdout="logs/out.txt",
-            stderr="logs/err.txt",
-        )
-        handle = single(await backend.submit(spec))
-        work = directory(home, handle) / "work"
-        assert (work / "logs/out.txt").read_text() == "out\n"
-        assert (work / "logs/err.txt").read_text() == "err\n"
-
-    async def test_one_named_file_can_hold_both_streams(
-        self, backend: Any, home: Path, job_script: Script
-    ):
-        spec = SubmissionSpec(
-            executable=job_script("echo out; echo err >&2"),
-            stdout="all.txt",
-            stderr="all.txt",
-        )
-        handle = single(await backend.submit(spec))
-        assert (directory(home, handle) / "work/all.txt").read_text() == "out\nerr\n"
 
     async def test_resources_reach_the_scheduler(
         self, backend: Any, home: Path, job_script: Script
@@ -266,17 +142,6 @@ class TestRefused:
                 SubmissionSpec(executable=job_script()),
                 [CopyVars(environment={"BAD NAME": "x"})],
             )
-
-    async def test_a_secret_named_like_an_input(
-        self, backend: Any, tmp_path: Path, job_script: Script
-    ):
-        (tmp_path / "x").write_text("input")
-        spec = SubmissionSpec(
-            executable=job_script(),
-            inputs=[FileRef(name="x", source=str(tmp_path / "x"))],
-        )
-        with pytest.raises(SpecificationRejectedError, match="named like inputs"):
-            await backend.submit(spec, [CopyVars(secrets={"x": b"secret"})])
 
     async def test_a_queue_the_scheduler_cannot_express(
         self, backend: Any, job_script: Script

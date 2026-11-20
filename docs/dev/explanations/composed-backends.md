@@ -12,9 +12,8 @@ transports and M schedulers N + M classes instead of N x M, and a new combinatio
 | `Scheduler` | its tools' command lines and output | how the resource is reached, a copy's environment and secrets |
 | `BatchBackend` | which files a job needs, and how to find them again | which transport or scheduler it has |
 
-Tests check this: `tests/unit/backends/batch/test_composition.py` reads the imports of each part,
-and runs every combination that ships. It also runs a second scheduler that exists only in the
-tests, so that a backend shaped around Slurm would fail.
+No test checks this, since it is how the parts are built, not what they do: keep it in review. The
+shared suite runs every combination that ships, on its stacks.
 
 ## No Python on the resource
 
