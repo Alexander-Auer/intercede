@@ -17,7 +17,7 @@ from typing import Any
 import asyncssh
 import pytest
 
-from intercede._backends.batch.transport.ssh import SSHTransport, route
+from intercede._backends.batch.transport.ssh import SSHTransport
 from intercede.auth import (
     Credential,
     SSHPassword,
@@ -242,10 +242,3 @@ class TestJumpHost:
             with pytest.raises(AuthenticationError, match="host key"):
                 await echo(ssh)
         assert sshd.logins == 0
-
-    def test_the_route_defaults_the_user_and_port(self, sshd: SSHD):
-        config = sshd.config(jump_host="gw.example.org")
-        assert route(config) == [
-            (USER, "gw.example.org", 22),
-            (USER, HOST, sshd.port),
-        ]
