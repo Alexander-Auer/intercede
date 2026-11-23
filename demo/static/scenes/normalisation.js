@@ -1,6 +1,8 @@
 // Scene 6: what each resource answered, next to what interCEde returned for it.
 // Drawn from the traces: the latest call of one operation on every backend.
 
+import { isExchange } from "./trace.js";
+
 const OPERATIONS = [
   ["get_status", "Status"],
   ["submit", "Submit"],
@@ -73,51 +75,30 @@ function row(column, op, ctx) {
 // -- the resource's own words ----------------------------------------------------
 
 function raw(op, ctx) {
-  const exchanges = op.steps.filter((s) => (s.lane === "transport" && s.call === "run") || s.lane === "tools");
+  // What crossed to the resource and what it answered; a copy of files gets no answer.
+  const exchanges = op.steps.filter((s) => isExchange(s) && (s.said !== undefined || s.stdout !== undefined || s.raised));
   if (!exchanges.length) {
     return op.column === "fake"
-      ? `<div class="muted" style="font-size:16px">In process: the Fake has no tool to call and no text to parse.</div>`
-      : `<div class="muted" style="font-size:16px">No command was needed${op.outcome?.raised ? "" : " (nothing to ask the resource about)"}.</div>`;
+      ? `<div class="muted" style="font-size:16px">In process: the Fake has no resource to ask and nothing to parse.</div>`
+      : `<div class="muted" style="font-size:16px">Nothing was asked of the resource${op.outcome?.raised ? "" : " (nothing to ask it about)"}.</div>`;
   }
   return exchanges.map((s) => {
-    const argv = (s.argv ?? []).filter((a) => a !== "-debug").map(shorten).join(" ");
-    const out = lines(s.stdout);
-    const rules = op.name === "get_status" ? decided(s.stdout, ctx) : [];
-    const err = s.returncode ? lines(s.stderr, 3) : "";
+    const sent = s.sent ?? `$ ${(s.argv ?? []).join(" ")}`;
+    const answer = s.answer ?? (s.returncode !== undefined ? `exit ${s.returncode}` : "");
+    const bad = Boolean(s.raised) || (s.returncode ?? 0) !== 0 || /^[45]\d\d/.test(answer);
+    const out = lines(s.said ?? s.stdout);
+    const err = bad ? lines(s.said_err ?? s.stderr, 3) : "";
     return `<div class="exchange">
-      <div class="mono cmd">$ ${ctx.escape(argv)} ${s.returncode !== undefined ? `<span class="exit ${s.returncode ? "bad" : ""}">exit ${s.returncode}</span>` : ""}</div>
-      ${out ? `<pre class="code said">${op.name === "get_status" ? mark(ctx.escape(out)) : ctx.escape(out)}</pre>` : `<div class="muted" style="font-size:14px">(printed nothing)</div>`}
-      ${rules.length ? `<div class="rules">${rules.join("")}</div>` : ""}
+      <div class="mono cmd">${ctx.escape(shortened(sent))} ${answer ? `<span class="exit ${bad ? "bad" : ""}">${ctx.escape(answer)}</span>` : ""}</div>
+      ${out ? `<pre class="code said">${ctx.escape(out)}</pre>` : `<div class="muted" style="font-size:14px">(said nothing)</div>`}
       ${err ? `<pre class="code said err">${ctx.escape(err)}</pre>` : ""}
       ${s.raised ? `<div class="exit bad">${ctx.escape(s.raised)}: ${ctx.escape(s.message)}</div>` : ""}
     </div>`;
   }).join("");
 }
 
-// -- which value decided the status, and the rule that turned it into one ---------------
-
-/** Highlight the value a backend reads a job's state from: Slurm's state, HTCondor's JobStatus. */
-function mark(html) {
-  return html
-    .replace(/^([^|\s]+\|)([A-Z_]+)/gm, '$1<mark>$2</mark>')
-    .replace(/(&quot;(?:JobStatus|ExitCode|ExitBySignal)&quot;: )([^,\n]+)/g, '$1<mark>$2</mark>');
-}
-
-/** The rules, from the backends' own tables, behind the states in this output. */
-function decided(text, ctx) {
-  const maps = ctx.store.meta.mappings;
-  const rules = new Set();
-  for (const [, state] of (text ?? "").matchAll(/^[^|\s]+\|([A-Z_]+)/gm)) {
-    rules.add(`<span class="rule"><mark>${ctx.escape(state)}</mark> → ${ctx.escape(maps.slurm[state] ?? "Unknown")}</span>`);
-  }
-  for (const [, code] of (text ?? "").matchAll(/"JobStatus": (\d+)/g)) {
-    rules.add(maps.htcondor[code]
-      ? `<span class="rule">JobStatus <mark>${code}</mark> → ${ctx.escape(maps.htcondor[code])}</span>`
-      : code === "4"
-        ? `<span class="rule" title="${ctx.escape(maps.htcondor_finished)}">JobStatus <mark>4</mark> (completed) → Done or Failed, by ExitCode</span>`
-        : `<span class="rule">JobStatus <mark>${code}</mark> → by the backend's own rule (held, removed)</span>`);
-  }
-  return [...rules];
+function shortened(line) {
+  return line.split(" ").map(shorten).join(" ");
 }
 
 function shorten(arg) {

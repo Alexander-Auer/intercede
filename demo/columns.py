@@ -1,52 +1,43 @@
-"""The backends on the board: how each is built, traced, and found to be online.
+"""The backends on the board: which there are, and when each is online.
 
-A live column is built from its stack's own ``intercede-client.toml`` and the
-credentials the stack minted at start, read the way the integration suite reads
-them. The classes come from the registry's own tables, so the demo runs the same
-code a consumer gets from ``registry.get_backend``; only the seams are traced:
-
-- ``batch``: the registry's transport and scheduler, each wrapped, composed by
-  ``BatchBackend.from_settings`` exactly as ``registry._build`` composes them;
-- ``htcondor-ce``: the registry's backend class with a tracing ``runner``, the
-  callable every HTCondor tool runs through;
-- every backend: the consumer's provider, and the backend itself, are wrapped.
+There is a column per stack in ``tests/integration/stacks.yml`` whose backend
+this version provides, built from the stack's own ``intercede-client.toml`` and
+the credentials the stack minted at start (``demo/build.py``), plus the Fake,
+which needs nothing. A backend added to interCEde, with its stack, appears here
+without a change to the demo.
 """
 
 from __future__ import annotations
 
 import asyncio
-import tomllib
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
-from tests.integration.conftest import _READERS
-from tests.integration.generate_matrix import STACKS_DIR, compose_env, load_manifest
-
+from demo import build
 from demo.agent import AgentBackend
-from demo.tracing import (
-    Tracer,
-    TracingProvider,
-    TracingRunner,
-    TracingScheduler,
-    TracingTransport,
-    capabilities,
-    traced_backend,
-)
-from intercede import registry
-from intercede._backends.batch.protocols import Scheduler, Transport
+from demo.build import client_config, compose_file, credential, stacks
+from demo.tracing import Tracer, TracingProvider, capabilities, traced_backend
 from intercede._backends.fake import FakeBackend
-from intercede._backends.monolith.htcondorce.process import run_process
 from intercede.auth.providers import StaticCredentials
-from intercede.config import validate_config
 
-# The lanes of each kind's sequence diagram, top to bottom of the stack.
+# The lanes of a sequence diagram, top to bottom of the stack. Below the
+# provider, the parts a composed backend is made of; any other backend adds the
+# doors it went through (a process, HTTP) as its calls use them.
 LANES = {
     "fake": ["consumer", "backend", "resource"],
-    "monolith": ["consumer", "backend", "provider", "tools", "resource"],
-    "batch": ["consumer", "backend", "provider", "scheduler", "transport", "resource"],
+    "composed": [
+        "consumer",
+        "backend",
+        "provider",
+        "scheduler",
+        "transport",
+        "resource",
+    ],
 }
+DEFAULT_LANES = ["consumer", "backend", "provider", "resource"]
 
 
 @dataclass
@@ -82,18 +73,9 @@ class Column:
             if self.backend
             else None,
             "resource": self.backend.resource if self.backend else None,
-            "lanes": LANES[self.kind],
+            "lanes": LANES.get(self.kind, DEFAULT_LANES),
             "start": start_command(self.stack) if self.stack else None,
         }
-
-
-def stacks() -> dict[str, dict[str, Any]]:
-    """The entries of ``tests/integration/stacks.yml``, by id."""
-    return {entry["id"]: entry for entry in load_manifest()}
-
-
-def compose_file(stack_id: str) -> Path:
-    return STACKS_DIR / compose_env(stacks()[stack_id]) / "compose.yml"
 
 
 def start_command(stack_id: str) -> str:
@@ -101,29 +83,6 @@ def start_command(stack_id: str) -> str:
     return (
         f"docker compose -f {compose_file(stack_id).relative_to(Path.cwd())} up --wait"
     )
-
-
-def client_config(stack_id: str) -> dict[str, Any]:
-    """Read a stack's ``basic`` client configuration, as the integration suite does.
-
-    The host key an SSH stack creates when it starts is added to its [backend].
-    """
-    path = STACKS_DIR / stack_id / "config" / "basic" / "intercede-client.toml"
-    with path.open("rb") as f:
-        config = tomllib.load(f)
-    if config.get("credentials", {}).get("type") == "ssh-key":
-        known_hosts = (
-            compose_file(stack_id).parent
-            / config["credentials"]["path"]
-            / "known_hosts"
-        )
-        config["backend"]["known_hosts"] = known_hosts.read_text()
-    return config
-
-
-def credential(stack_id: str, config: dict[str, Any]) -> Any:
-    section = config["credentials"]
-    return _READERS[section["type"]](compose_file(stack_id).parent / section["path"])
 
 
 async def container_running(compose: Path) -> bool:
@@ -160,16 +119,18 @@ class Columns:
         self.tracer = tracer
         self.columns: dict[str, Column] = {
             "fake": Column("fake", "Fake", "fake", "FAKE"),
-            "htcondor": Column(
-                "htcondor", "HTCondor-CE", "monolith", "LIVE", stack="htcondor"
-            ),
-            "ssh-slurm": Column(
-                "ssh-slurm", "SSH + Slurm", "batch", "LIVE", stack="ssh-slurm"
-            ),
-            "local-slurm": Column(
-                "local-slurm", "local + Slurm", "batch", "LIVE", stack="local-slurm"
-            ),
         }
+        for stack_id in stacks():
+            if not build.provided(stack_id):
+                continue  # its backend has not landed yet
+            backend = build.static_config(stack_id)["backend"]  # type: ignore[index]
+            self.columns[stack_id] = Column(
+                stack_id,
+                build.title(backend),
+                build.family(build.model_of(backend)),
+                "LIVE",
+                stack=stack_id,
+            )
 
     def snapshot(self) -> list[dict[str, Any]]:
         return [column.as_event() for column in self.columns.values()]
@@ -257,39 +218,21 @@ class Columns:
     ) -> Any:
         assert column.stack is not None
         if stacks()[column.stack].get("exec_in_container"):
-            # Its local transport must run where Slurm is: in the container (demo/agent.py).
-            agent = AgentBackend(compose_file(column.stack), self.tracer)
+            # It runs where the integration suite runs it: in the container (demo/agent.py).
+            agent = AgentBackend(
+                compose_file(column.stack), column.stack, column.id, self.tracer
+            )
             return traced_backend(agent, column.id, column.source, self.tracer)
         config = client_config(column.stack)
-        settings = validate_config(config["backend"])
+        build.trust(column.stack, config)
         held = [credential(column.stack, config)] if "credentials" in config else []
         # The consumer opens its provider once and shares it; interCEde never closes it.
         provider = await exits.enter_async_context(
             TracingProvider(StaticCredentials(held), self.tracer)
         )
-
-        if settings.kind == "batch":
-            transport = TracingTransport(
-                registry._load("transport", settings.transport).from_settings(
-                    settings, provider
-                ),
-                self.tracer,
-            )
-            scheduler = TracingScheduler(
-                registry._load("scheduler", settings.scheduler).from_settings(settings),
-                self.tracer,
-            )
-            # The same checks the registry makes before composing them.
-            registry._checked("transport", settings.transport, transport, Transport)
-            registry._checked("scheduler", settings.scheduler, scheduler, Scheduler)
-            inner = registry._load("backend", "batch").from_settings(
-                settings, transport=transport, scheduler=scheduler
-            )
-        else:
-            inner = registry._load("backend", settings.kind)(
-                settings, provider, runner=TracingRunner(run_process, self.tracer)
-            )
-        return traced_backend(inner, column.id, column.source, self.tracer)
+        return build.build(
+            config["backend"], provider, self.tracer, column.id, column.source
+        )
 
     async def _problem(self, column: Column) -> str | None:
         """Say why a live column cannot be used now, or None when it can."""
@@ -298,20 +241,32 @@ class Columns:
             config = client_config(column.stack)
         except FileNotFoundError as exc:
             return f"{Path(exc.filename).name} is missing: the stack is not running"
-        backend = config["backend"]
+        if not await container_running(compose_file(column.stack)):
+            return "its container is not running"
         if stacks()[column.stack].get("exec_in_container"):
-            if not await container_running(compose_file(column.stack)):
-                return "its container is not running"
-            return None
-        if "endpoint" in backend:
-            host, _, port = backend["endpoint"].partition(":")
-        else:
-            host, port = backend["host"], str(backend.get("port", 22))
-        if not await reachable(host, int(port or 9619)):
-            return f"nothing answers on {host}:{port}"
+            return None  # reached from inside its container, not over the network
+        address = _address(config["backend"])
+        if address is not None and not await reachable(*address):
+            return f"nothing answers on {address[0]}:{address[1]}"
         if "credentials" in config:
             try:
                 credential(column.stack, config)
             except FileNotFoundError as exc:
                 return f"{Path(exc.filename).name} is missing: the stack is not running"
         return None
+
+
+def _address(backend: dict[str, Any]) -> tuple[str, int] | None:
+    """Where a configuration says its resource listens, when it says so.
+
+    An ``endpoint`` is a URL or ``host:port``; otherwise a ``host`` and its
+    ``port``. Without a port it gives, there is nothing to check.
+    """
+    if "endpoint" in backend:
+        endpoint = str(backend["endpoint"])
+        url = urlsplit(endpoint if "://" in endpoint else f"//{endpoint}")
+        port = url.port or {"https": 443, "http": 80}.get(url.scheme)
+        return (url.hostname, port) if url.hostname and port else None
+    if "host" in backend and "port" in backend:
+        return str(backend["host"]), int(backend["port"])
+    return None

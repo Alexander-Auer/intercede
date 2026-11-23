@@ -87,7 +87,8 @@ PAYLOADS: dict[str, Payload] = {
             "Several output files",
             "Writes three result files; get_output collects them by name.",
             'for n in 1 2 3; do echo "result $n of copy $COPY_INDEX" > "result-$n.txt"; done\necho wrote 3 files\n',
-            # By name, not "result-*.txt": HTCondor-CE refuses a pattern (scene 3 shows it).
+            # By name, not "result-*.txt": a backend that brings outputs back by name
+            # refuses a pattern (scene 3 shows which).
             outputs=("result-1.txt", "result-2.txt", "result-3.txt"),
             fake=(
                 FakeStep(1, "Waiting"),

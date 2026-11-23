@@ -1,64 +1,54 @@
 """DRY RUN: the real ``submit()`` of each backend, with only the resource replaced by a recorder.
 
 The translation scene shows what one ``SubmissionSpec`` becomes on each backend.
-No pure function in interCEde gives an HTCondor submit description: the
-backend's ``submit()`` assembles it. So instead of rebuilding that here, the real
-``submit()`` runs, against a stand-in at the lowest seam:
+The real ``submit()`` runs, built as the board builds it, and the resource is
+replaced where the backend reaches it:
 
-- HTCondor-CE: a runner that reads the description when ``condor_submit`` is
-  called, and answers as ``condor_submit -terse`` does;
-- the batch backend: a transport that keeps what ``put`` stages and answers
-  ``sbatch --parsable`` with an array ID.
+- a composed backend: its transport is a recorder, which runs nothing and keeps
+  what it is asked to copy;
+- any other backend: the doors it goes through (a program, an HTTP request)
+  stand in for the resource (``demo/doors.py``).
 
-Everything shown, including every refusal, is the library's own output. The
-job IDs it returns are made up and thrown away; nothing reaches a resource.
+The recorder answers every call with nothing, so ``submit()`` stops at the first
+answer it needs: by then it has sent what it would send. A refusal comes before
+anything is sent. Everything shown is the library's own output; nothing reaches
+a resource, and no other connection is allowed while a dry run is going.
+
+The targets come from the stacks' own configurations: each backend once, and
+each scheduler of the composed backend once, whatever transport reaches it.
 """
 
 from __future__ import annotations
 
-import re
-import tempfile
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
 
+import asyncssh
 from pydantic import ValidationError
 
+from demo import build, doors
 from demo.events import Bus
-from demo.tracing import (
-    Tracer,
-    TracingRunner,
-    TracingScheduler,
-    TracingTransport,
-    traced_backend,
-)
-from intercede import registry
+from demo.tracing import Tracer
 from intercede._backends.batch.protocols import CommandResult
-from intercede.auth.models import BearerToken
-from intercede.auth.providers import StaticCredentials
+from intercede.auth.models import (
+    BearerToken,
+    Credential,
+    CredentialRequirements,
+    SSHPassword,
+    SSHPrivateKey,
+)
 from intercede.config import validate_config
+from intercede.exceptions import ConfigurationError, SpecificationRejectedError
 from intercede.models import CopyVars, SubmissionSpec
 
-DRY_CLUSTER = 4242
 LAUNCHER = ["apptainer", "exec", "--bind", "/cvmfs", "{image}"]
-
-TARGETS = {
-    "htcondor-ce": {"kind": "htcondor-ce", "endpoint": "ce.example.org:9619"},
-    "slurm": {
-        "kind": "batch",
-        "transport": "ssh",
-        "scheduler": "slurm",
-        "host": "login.example.org",
-        "user": "dirac",
-        "known_hosts": "login.example.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDryRunDryRunDryRunDryRunDryRunDryRun",
-    },
-}
 
 
 class _RecordingTransport:
     """Stands in for a resource reached through a transport: it records, and runs nothing."""
 
-    resource = "login.example.org"
+    resource = "dry-run"
 
     async def __aenter__(self) -> Self:
         return self
@@ -72,9 +62,7 @@ class _RecordingTransport:
         return None
 
     async def run(self, argv: Any, *, timeout: float) -> CommandResult:
-        if argv and argv[0] == "sbatch":
-            return CommandResult(returncode=0, stdout=f"{DRY_CLUSTER}\n", stderr="")
-        return CommandResult(returncode=0, stdout="", stderr="")
+        return CommandResult(returncode=0, stdout=doors.STAND_IN_ANSWER, stderr="")
 
     async def put(self, local: Path, remote: str, *, timeout: float) -> None:
         return None  # what it would copy is listed by the tracing wrapper around it
@@ -83,19 +71,79 @@ class _RecordingTransport:
         raise NotImplementedError("a dry run collects nothing")
 
 
-async def _recording_runner(argv: Any, env: Any, timeout: float) -> CommandResult:
-    """Answers ``condor_submit -terse`` for the number of jobs the description queues."""
-    if argv and argv[0] == "condor_submit":
-        description = next(Path(a) for a in argv if a.endswith(".sub"))
-        count = int(
-            re.findall(r"^queue (\d+)", description.read_text(), re.MULTILINE)[-1]
-        )
-        return CommandResult(
-            returncode=0,
-            stdout=f"{DRY_CLUSTER}.0 - {DRY_CLUSTER}.{count - 1}\n",
-            stderr="",
-        )
-    return CommandResult(returncode=0, stdout="", stderr="")
+class _DryRunProvider:
+    """Hands out a made-up credential of whatever kind a backend asks for."""
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        return None
+
+    async def get(self, requirements: CredentialRequirements) -> Credential:
+        if requirements.kind is SSHPrivateKey:
+            key = asyncssh.generate_private_key("ssh-ed25519")
+            return SSHPrivateKey(pem=key.export_private_key())
+        if requirements.kind is SSHPassword:
+            return SSHPassword(value="dry-run-password-not-a-real-one")
+        return BearerToken(value="dry-run-token-not-a-real-one")
+
+
+def targets() -> dict[str, tuple[str, dict[str, Any]]]:
+    """What the dry run submits to, by name: a title and a [backend] table.
+
+    A composed backend is shown once per scheduler: its transport is replaced,
+    so which one a stack uses does not change what is sent.
+    """
+    found: dict[str, tuple[str, dict[str, Any]]] = {}
+    for stack_id in build.stacks():
+        if not build.provided(stack_id):
+            continue
+        backend = build.static_config(stack_id)["backend"]  # type: ignore[index]
+        model = build.model_of(backend) if _valid(backend) else None
+        if model is not None and not build.composed(model):
+            found.setdefault(backend["kind"], (build.title(backend), backend))
+        elif "scheduler" in backend and backend["scheduler"] not in found:
+            settled = _composed_without_its_transport(backend)
+            if settled is not None:
+                found[backend["scheduler"]] = (
+                    f"{backend['scheduler']} (any transport)",
+                    settled,
+                )
+    return found
+
+
+def _valid(backend: dict[str, Any]) -> bool:
+    try:
+        validate_config(backend)
+    except ConfigurationError:
+        return False
+    return True
+
+
+def _composed_without_its_transport(backend: dict[str, Any]) -> dict[str, Any] | None:
+    """The table as committed, or as any transport would have it, whichever is complete.
+
+    A stack's table can need what the stack makes at start (an SSH host key); the
+    recorder replaces the transport, so any transport's fields will do.
+    """
+    if _valid(backend):
+        return backend
+    for model in build.composed_models():
+        fields = model.model_fields
+        for transport in build.registry_choices(model, "transport"):
+            candidate = {
+                **{k: v for k, v in backend.items() if k in fields},
+                "transport": transport,
+            }
+            if _valid(candidate):
+                return candidate
+    return None
 
 
 async def translate(form: dict[str, Any], launcher: bool) -> dict[str, Any]:
@@ -111,10 +159,13 @@ async def translate(form: dict[str, Any], launcher: bool) -> dict[str, Any]:
                 f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors()
             ]
         }
-    results = {
-        name: await _dry(name, config, spec, copies, launcher, tracer)
-        for name, config in TARGETS.items()
-    }
+    doors.install()
+    results = {}
+    for name, (title, backend) in targets().items():
+        results[name] = {
+            "title": title,
+            **await _dry(name, backend, spec, copies, launcher, tracer),
+        }
     return bus.redactor.scrub(
         {
             "spec": spec.model_dump(mode="json", exclude_defaults=True),
@@ -168,59 +219,46 @@ def _spec(form: dict[str, Any]) -> tuple[SubmissionSpec, list[CopyVars]]:
 
 async def _dry(
     name: str,
-    config: dict[str, Any],
+    backend: dict[str, Any],
     spec: SubmissionSpec,
     copies: list[CopyVars],
     launcher: bool,
     tracer: Tracer,
 ) -> dict[str, Any]:
-    settings: Any = validate_config(
-        {**config, **({"container_launcher": LAUNCHER} if launcher else {})}
+    if launcher and "container_launcher" in build.model_of(backend).model_fields:  # type: ignore[attr-defined]
+        backend = {**backend, "container_launcher": LAUNCHER}
+    composed = build.composed(build.model_of(backend))
+    traced = build.build(
+        backend,
+        _DryRunProvider(),
+        tracer,
+        f"dry-run:{name}",
+        "DRY RUN",
+        transport=_RecordingTransport() if composed else None,
     )
-    if settings.kind == "batch":
-        transport = TracingTransport(_RecordingTransport(), tracer)
-        scheduler = TracingScheduler(
-            registry._load("scheduler", settings.scheduler).from_settings(settings),
-            tracer,
-        )
-        inner = registry._load("backend", "batch").from_settings(
-            settings, transport=transport, scheduler=scheduler
-        )
-        with_workdir = None
-    else:
-        with_workdir = tempfile.TemporaryDirectory(prefix="intercede-dryrun-")
-        provider = StaticCredentials(
-            [BearerToken(value="dry-run-token-not-a-real-one")]
-        )
-        inner = registry._load("backend", settings.kind)(
-            settings,
-            provider,
-            runner=TracingRunner(_recording_runner, tracer),
-            workdir=Path(with_workdir.name),
-        )
-    backend = traced_backend(inner, f"dry-run:{name}", "DRY RUN", tracer)
-    try:
-        async with backend:
-            submission = await backend.submit(spec, copies)
-    except Exception as exc:  # the backend's own refusal, shown as it is
-        return {
-            "class": type(inner).__name__,
-            "raised": type(exc).__name__,
-            "message": str(exc),
-        }
-    finally:
-        if with_workdir is not None:
-            with_workdir.cleanup()
+    shown_class = type(traced.inner).__name__
+    with doors.standing_in():
+        try:
+            async with traced:
+                await traced.submit(spec, copies)
+        except (SpecificationRejectedError, ConfigurationError) as exc:
+            # The backend's own refusal, before anything was sent.
+            return {
+                "class": shown_class,
+                "raised": type(exc).__name__,
+                "message": str(exc),
+            }
+        except (
+            Exception
+        ) as exc:  # the first answer it needed was the recorder's nothing
+            stopped = f"{type(exc).__name__}: {exc}"
+        else:
+            stopped = None
     operation = tracer.operations[-1]
     return {
-        "class": type(inner).__name__,
-        "handles": len(submission.handles),
-        "steps": [
-            s
-            for s in operation.steps
-            if s["lane"] in ("scheduler", "transport", "tools")
-            and s["call"] in ("submit_command", "put", "run", "condor_submit")
-        ],
+        "class": shown_class,
+        "stopped": stopped,
+        "steps": [s for s in operation.steps if s["lane"] != "provider"],
     }
 
 

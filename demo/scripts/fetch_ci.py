@@ -112,7 +112,7 @@ def summary(run: dict[str, Any], jobs: list[dict[str, Any]]) -> dict[str, Any]:
         "created": run["created_at"],
         "url": run["html_url"],
         "conclusion": run["conclusion"] or run["status"],
-        # job name "htcondor / basic / lts" -> its conclusion
+        # job name "<stack> / <config> / <version>" -> its conclusion
         "jobs": {job["name"]: job["conclusion"] or job["status"] for job in jobs},
     }
 

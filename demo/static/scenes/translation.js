@@ -30,7 +30,7 @@ export default {
 
   mount(el, ctx) {
     el.innerHTML = `
-      <div style="display:grid; grid-template-columns: 400px minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items:start">
+      <div style="display:grid; grid-template-columns: 400px minmax(0, 1fr); gap: 16px; align-items:start">
         <div class="panel spec-form">
           <div class="row" style="gap:6px">${Object.entries(PRESETS).map(([k, p]) => `<button class="ghost small-btn" data-preset="${k}">${ctx.escape(p.title)}</button>`).join("")}</div>
           ${FIELDS.map(([name, label, kind]) => `<label>${label}${kind === "textarea" ? `<textarea data-field="${name}" rows="2"></textarea>` : `<input data-field="${name}">`}</label>`).join("")}
@@ -47,8 +47,7 @@ export default {
           <label class="row" style="gap:8px"><input type="checkbox" id="launcher"> the site configures a container_launcher</label>
           <div id="spec-error"></div>
         </div>
-        <div class="panel" id="t-htcondor-ce"></div>
-        <div class="panel" id="t-slurm"></div>
+        <div id="t-targets" style="display:grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 16px; align-items:start"></div>
       </div>`;
     el.addEventListener("click", (e) => {
       const key = e.target.closest("[data-preset]")?.dataset.preset;
@@ -91,33 +90,32 @@ function draw(el, ctx) {
   el.querySelector("#spec-error").innerHTML = result.spec_error
     ? `<div class="refusal"><strong>ValidationError</strong> before any backend sees it<pre>${ctx.escape(result.spec_error.join("\n"))}</pre></div>`
     : "";
-  for (const [name, title] of [["htcondor-ce", "HTCondor-CE"], ["slurm", "Slurm (any transport)"]]) {
-    const box = el.querySelector(`#t-${name}`);
-    const target = result.targets?.[name];
-    if (!target) { box.innerHTML = `<h2 style="margin:0">${title}</h2><p class="muted">no specification</p>`; continue; }
-    const head = `<h2 style="margin:0">${title} <span class="mono muted" style="font-size:15px">${ctx.escape(target.class)}</span></h2>`;
-    if (target.raised) {
-      box.innerHTML = `${head}<div class="refusal"><strong>${ctx.escape(target.raised)}</strong> at submit, before anything runs<pre>${ctx.escape(target.message)}</pre></div>`;
-      continue;
-    }
-    box.innerHTML = `${head}<div class="muted" style="font-size:16px; margin: 4px 0 8px">${target.handles} copies, one submission</div>${target.steps.map((s) => step(s, ctx)).join("")}`;
-  }
+  const targets = Object.entries(result.targets ?? {});
+  el.querySelector("#t-targets").innerHTML = targets.length
+    ? targets.map(([, target]) => panel(target, ctx)).join("")
+    : `<div class="panel muted">no specification</div>`;
 }
 
-function step(s, ctx) {
-  if (s.call === "condor_submit") {
-    const file = s.files?.[0];
-    return `<div class="muted" style="font-size:15px">$ ${ctx.escape(s.argv.filter((a) => a !== "-debug").map((a) => a.endsWith(".sub") ? "<description>" : a).join(" "))}</div>
-      <pre class="code dialect">${ctx.escape(file?.text ?? "")}</pre>`;
+function panel(target, ctx) {
+  const head = `<h2 style="margin:0">${ctx.escape(target.title)} <span class="mono muted" style="font-size:15px">${ctx.escape(target.class)}</span></h2>`;
+  if (target.raised) {
+    return `<div class="panel">${head}<div class="refusal"><strong>${ctx.escape(target.raised)}</strong> at submit, before anything is sent<pre>${ctx.escape(target.message)}</pre></div></div>`;
   }
-  if (s.call === "put") {
-    return `<div class="muted" style="font-size:15px; margin-top:8px">staged with the transport, then:</div>
-      ${s.files.filter((f) => f.text && f.name !== "job.sh").map((f) => `<div class="mono" style="font-size:14px">${ctx.escape(f.name)}</div><pre class="code dialect">${ctx.escape(f.text)}</pre>`).join("")}
-      <div class="muted" style="font-size:14px">${s.files.filter((f) => !f.text).map((f) => `<code>${ctx.escape(f.name)}</code>`).join(" ")} (contents not shown)</div>`;
-  }
-  if (s.call === "submit_command") {
-    return `<div class="muted mono" style="font-size:14px; overflow-wrap:anywhere">$ ${ctx.escape(s.argv.join(" "))}</div>
-      ${(s.files ?? []).map((f) => `<div class="mono" style="font-size:14px">${ctx.escape(f.name)}</div><pre class="code dialect">${ctx.escape(f.text)}</pre>`).join("")}`;
-  }
-  return "";
+  const shown = new Set();
+  const steps = target.steps.map((s) => step(s, shown, ctx)).join("");
+  const stopped = target.stopped
+    ? `<div class="muted" style="font-size:14px; margin-top:8px">The recorder answers with nothing, so submit() stopped at the first answer it needed: <span class="mono">${ctx.escape(target.stopped)}</span></div>`
+    : "";
+  return `<div class="panel">${head}${steps}${stopped}</div>`;
+}
+
+/** What one step sent, with the files or bodies that went with it; each text once. */
+function step(s, shown, ctx) {
+  const line = s.sent ?? (s.argv ? `$ ${s.argv.join(" ")}` : `${s.lane} · ${s.call}`);
+  const files = (s.files ?? []).filter((f) => !(f.text && shown.has(f.text)));
+  for (const f of files) if (f.text) shown.add(f.text);
+  const texts = files.filter((f) => f.text).map((f) => `<div class="mono" style="font-size:14px">${ctx.escape(f.name)}</div><pre class="code dialect">${ctx.escape(f.text)}</pre>`).join("");
+  const unshown = files.filter((f) => !f.text).map((f) => `<code>${ctx.escape(f.name)}</code>`).join(" ");
+  return `<div class="muted mono" style="font-size:14px; margin-top:8px; overflow-wrap:anywhere">${ctx.escape(line)}</div>
+    ${texts}${unshown ? `<div class="muted" style="font-size:14px">${unshown} (contents not shown)</div>` : ""}`;
 }

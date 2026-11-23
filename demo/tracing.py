@@ -13,11 +13,12 @@ that uses it, and files that hold secrets are listed by name only.
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import itertools
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
@@ -64,6 +65,26 @@ CAPABILITIES: tuple[tuple[str, type], ...] = (
 
 _ids = itertools.count(1)
 
+# Set while a traced transport passes a call on: its own lane shows the call, so
+# the doors it goes through (a subprocess, a connection) are not shown again.
+_crossing: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "intercede_demo_crossing", default=False
+)
+
+
+@contextlib.contextmanager
+def crossing() -> Iterator[None]:
+    token = _crossing.set(True)
+    try:
+        yield
+    finally:
+        _crossing.reset(token)
+
+
+def inside_a_traced_part() -> bool:
+    """Tell whether a call is being made by a traced transport, which shows it itself."""
+    return _crossing.get()
+
 
 @dataclass
 class Operation:
@@ -96,11 +117,49 @@ class Operation:
 _current: contextvars.ContextVar[Operation | None] = contextvars.ContextVar(
     "intercede_demo_operation", default=None
 )
+_current_tracer: contextvars.ContextVar[Tracer | None] = contextvars.ContextVar(
+    "intercede_demo_tracer", default=None
+)
 
 
 def current_operation() -> Operation | None:
     """The contract call running in this task, if any."""
     return _current.get()
+
+
+def record(lane: str, call: str, started: float, detail: dict[str, Any]) -> None:
+    """Record one call below the contract, on the tracer of the operation running now."""
+    tracer = _current_tracer.get()
+    if tracer is not None:
+        tracer.step(lane, call, started, detail)
+
+
+def exchange(
+    sent: str,
+    answer: str,
+    *,
+    said: str | None = None,
+    said_err: str | None = None,
+    carried: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """What every call that crosses to the resource carries, whichever way it crosses.
+
+    Args:
+        sent: One line saying what went out ("$ argv", "POST /path").
+        answer: One line saying what came back ("exit 0", "201 Created").
+        said: The resource's own words: a tool's stdout, a response's body.
+        said_err: What it printed on stderr, if anything.
+        carried: The files or bodies that went out with it, each a name and,
+            when it is small text, its text.
+    """
+    detail: dict[str, Any] = {"exchange": True, "sent": sent, "answer": answer}
+    if said is not None:
+        detail["said"] = _cut(said, MAX_TEXT)
+    if said_err:
+        detail["said_err"] = _cut(said_err, MAX_TEXT)
+    if carried:
+        detail["files"] = carried
+    return detail
 
 
 class Tracer:
@@ -208,12 +267,14 @@ def _operation(name: str) -> Callable[..., Awaitable[Any]]:
             self.column, self.source, name, _request(name, args, kwargs)
         )
         token = _current.set(operation)
+        tracer_token = _current_tracer.set(tracer)
         try:
             result = await getattr(self.inner, name)(*args, **kwargs)
         except Exception as exc:
             tracer.end(operation, {"raised": type(exc).__name__, "message": str(exc)})
             raise
         finally:
+            _current_tracer.reset(tracer_token)
             _current.reset(token)
         tracer.end(operation, _outcome(result))
         return result
@@ -277,47 +338,81 @@ class TracingTransport:
 
     async def run(self, argv: Sequence[str], *, timeout: float) -> Any:
         started = time.time()
+        sent = "$ " + " ".join(argv)
         try:
-            result = await self._inner.run(argv, timeout=timeout)
+            with crossing():
+                result = await self._inner.run(argv, timeout=timeout)
         except Exception as exc:
             self._tracer.step(
-                "transport", "run", started, {"argv": list(argv), **_raised(exc)}
+                "transport",
+                "run",
+                started,
+                {"argv": list(argv), **exchange(sent, "failed"), **_raised(exc)},
             )
             raise
         self._tracer.step(
-            "transport", "run", started, {"argv": list(argv), **_result(result)}
+            "transport",
+            "run",
+            started,
+            {
+                "argv": list(argv),
+                **_result(result),
+                **exchange(
+                    sent,
+                    f"exit {result.returncode}",
+                    said=result.stdout,
+                    said_err=result.stderr,
+                ),
+            },
         )
         return result
 
     async def put(self, local: Path, remote: str, *, timeout: float) -> None:
         started = time.time()
         files = _listing(local)
+        sent = f"put {len(files)} files → {remote}"
         try:
-            await self._inner.put(local, remote, timeout=timeout)
+            with crossing():
+                await self._inner.put(local, remote, timeout=timeout)
         except Exception as exc:
             self._tracer.step(
                 "transport",
                 "put",
                 started,
-                {"remote": remote, "files": files, **_raised(exc)},
+                {
+                    "remote": remote,
+                    **exchange(sent, "failed", carried=files),
+                    **_raised(exc),
+                },
             )
             raise
         self._tracer.step(
-            "transport", "put", started, {"remote": remote, "files": files}
+            "transport",
+            "put",
+            started,
+            {"remote": remote, **exchange(sent, "done", carried=files)},
         )
 
     async def get(self, remote: str, local: Path, *, timeout: float) -> None:
         started = time.time()
+        sent = f"get {remote}"
         try:
-            await self._inner.get(remote, local, timeout=timeout)
+            with crossing():
+                await self._inner.get(remote, local, timeout=timeout)
         except Exception as exc:
             self._tracer.step(
-                "transport", "get", started, {"remote": remote, **_raised(exc)}
+                "transport",
+                "get",
+                started,
+                {"remote": remote, **exchange(sent, "failed"), **_raised(exc)},
             )
             raise
         size = local.stat().st_size if local.is_file() else None
         self._tracer.step(
-            "transport", "get", started, {"remote": remote, "bytes": size}
+            "transport",
+            "get",
+            started,
+            {"remote": remote, "bytes": size, **exchange(sent, f"{size} bytes")},
         )
 
 
@@ -397,41 +492,6 @@ class TracingScheduler:
         shown = dict(parsed) if isinstance(parsed, Mapping) else list(parsed)
         self._tracer.step("scheduler", call, started, {"parsed": _plain(shown)})
         return parsed
-
-
-# What of a tool's environment is shown: the configuration the backend gives it,
-# never the rest of os.environ, which may hold anything.
-_SHOWN_ENVIRONMENT = ("CONDOR_CONFIG", "_CONDOR_")
-
-
-class TracingRunner:
-    """How the HTCondor-CE backend runs each HTCondor tool, with every call seen."""
-
-    def __init__(self, inner: Callable[..., Awaitable[Any]], tracer: Tracer) -> None:
-        self._inner = inner
-        self._tracer = tracer
-
-    async def __call__(
-        self, argv: Sequence[str], env: Mapping[str, str], timeout: float
-    ) -> Any:
-        started = time.time()
-        detail: dict[str, Any] = {
-            "argv": list(argv),
-            "env": {k: v for k, v in env.items() if k.startswith(_SHOWN_ENVIRONMENT)},
-        }
-        if argv and argv[0] == "condor_submit":
-            detail["files"] = [
-                {"name": Path(arg).name, "text": _cut(Path(arg).read_text(), MAX_FILE)}
-                for arg in argv
-                if arg.endswith(".sub") and Path(arg).is_file()
-            ]
-        try:
-            result = await self._inner(argv, env, timeout)
-        except Exception as exc:
-            self._tracer.step("tools", argv[0], started, {**detail, **_raised(exc)})
-            raise
-        self._tracer.step("tools", argv[0], started, {**detail, **_result(result)})
-        return result
 
 
 class TracingProvider:

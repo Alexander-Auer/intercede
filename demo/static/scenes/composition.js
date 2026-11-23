@@ -12,7 +12,7 @@ export default {
     el.innerHTML = `
       <div style="display:grid; grid-template-columns: minmax(0, 2.2fr) minmax(0, 1fr); gap: 22px; align-items:start">
         <div class="panel">
-          <div class="layer-title">BatchBackend <span class="muted">= one transport × one scheduler, chosen by configuration</span></div>
+          <div class="layer-title">${ctx.escape(data.composed_class)} <span class="muted">= one transport × one scheduler, chosen by configuration</span></div>
           <table class="grid">
             <thead><tr><th></th>${data.schedulers.map((s) => `<th>${ctx.escape(s.scheduler)}<small class="mono">${ctx.escape(s.class ?? "no class yet")}</small></th>`).join("")}</tr></thead>
             <tbody>${data.transports.map((t) => `<tr><th>${ctx.escape(t.label)}<small class="mono">${ctx.escape(t.class ?? "no class yet")}</small></th>${t.cells.map(cell).join("")}</tr>`).join("")}</tbody>

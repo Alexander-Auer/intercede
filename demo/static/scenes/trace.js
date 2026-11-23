@@ -6,14 +6,14 @@ let showPolls = false;
 let detail = null; // {op, index}: the step whose details are open
 
 const LANE_TITLES = {
-  consumer: "consumer",
-  backend: "backend",
-  provider: "provider",
-  scheduler: "scheduler",
-  transport: "transport",
-  tools: "condor tools",
-  resource: "resource",
+  process: "a program",
+  http: "HTTP",
 };
+
+/** A step that crossed to the resource: through a transport, or a door (a program, HTTP). */
+export function isExchange(step) {
+  return Boolean(step.exchange) || step.lane === "transport" || step.lane === "tools"; // "tools": older recordings
+}
 
 export default {
   title: "Trace",
@@ -105,7 +105,10 @@ const TOP = 62;
 
 function diagram(op, ctx, available) {
   const column = ctx.store.columns.find((c) => c.id === op.column);
-  const lanes = column?.lanes ?? ["consumer", "backend", "resource"];
+  const base = column?.lanes ?? ["consumer", "backend", "resource"];
+  // The doors a backend went through become lanes as it uses them, above the resource.
+  const doors = [...new Set(op.steps.map((s) => s.lane))].filter((lane) => !base.includes(lane));
+  const lanes = [...base.slice(0, -1), ...doors, base[base.length - 1]];
   const rows = rowsOf(op, lanes);
   const width = Math.max(520, Math.floor(available || 760));
   const margin = 60;
@@ -150,14 +153,15 @@ function rowsOf(op, lanes) {
   op.steps.forEach((step, index) => {
     const lane = lanes.includes(step.lane) ? step.lane : "resource";
     const failed = step.raised ? `${step.raised}: ${step.message}` : null;
-    if (step.lane === "transport" || step.lane === "tools") {
-      const what = step.call === "put" ? `put ${step.files?.length ?? ""} files → ${step.remote}`
-        : step.call === "get" ? `get ${step.remote}` : `$ ${(step.argv ?? []).join(" ")}`;
-      // One row through the transport (or the tool) to the resource: it only passes the call on.
+    if (isExchange(step)) {
+      const what = step.sent ?? (step.call === "put" ? `put ${step.files?.length ?? ""} files → ${step.remote}`
+        : step.call === "get" ? `get ${step.remote}` : `$ ${(step.argv ?? []).join(" ")}`);
+      // One row through the transport (or the door) to the resource: it only passes the call on.
       rows.push({ from: "backend", to: "resource", via: lane, label: what, full: what, index });
       rows.push({
         from: "resource", to: "backend", back: true, index, ms: step.ms, error: Boolean(failed),
-        label: failed ?? (step.returncode !== undefined ? `exit ${step.returncode}${firstLine(step.stdout)}` : step.files ? `${step.files.length} files` : step.bytes !== undefined ? `${step.bytes ?? "?"} bytes` : "done"),
+        label: failed ?? (step.answer !== undefined ? `${step.answer}${firstLine(step.said)}`
+          : step.returncode !== undefined ? `exit ${step.returncode}${firstLine(step.stdout)}` : step.files ? `${step.files.length} files` : step.bytes !== undefined ? `${step.bytes ?? "?"} bytes` : "done"),
       });
     } else if (step.lane === "provider") {
       rows.push({ from: "backend", to: "provider", label: `get(${step.asked?.kind}, ${(step.asked?.scopes ?? []).join(" ") || "no scopes"})`, index });
@@ -233,6 +237,7 @@ function drawDetail(ctx) {
     return;
   }
   const parts = [`<strong>${ctx.escape(step.lane)} · ${ctx.escape(step.call)}</strong> <span class="muted">${step.ms} ms</span>`];
+  if (step.sent) parts.push(block("sent", step.sent, ctx));
   if (step.argv) parts.push(block("argv", JSON.stringify(step.argv), ctx));
   if (step.asked) parts.push(block("asked for", JSON.stringify(step.asked, null, 1), ctx));
   if (step.returned) parts.push(block("returned", JSON.stringify(step.returned, null, 1), ctx));
@@ -242,6 +247,7 @@ function drawDetail(ctx) {
   }
   if (step.parsed !== undefined) parts.push(block("parsed", JSON.stringify(step.parsed, null, 1), ctx));
   if (step.returncode !== undefined) parts.push(block(`exit ${step.returncode} · stdout`, step.stdout || "(empty)", ctx));
+  else if (step.answer !== undefined && step.said !== undefined) parts.push(block(`answer · ${step.answer}`, step.said || "(empty)", ctx));
   if (step.stderr) parts.push(block("stderr", step.stderr, ctx));
   if (step.raised) parts.push(block(step.raised, step.message, ctx));
   box.innerHTML = `<div class="panel" style="max-height: 38vh; overflow:auto; display:grid; gap:8px">${parts.join("")}</div>`;

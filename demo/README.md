@@ -18,17 +18,19 @@ nothing else.
 
 ### The stacks
 
-The live columns use the integration stacks, started the way
-`docs/dev/how-to/run-integration-tests-locally.md` starts them:
-
-```sh
-docker compose -f tests/integration/stacks/htcondor/compose.yml up --wait
-docker compose -f tests/integration/stacks/slurm/compose.yml up --wait   # ssh-slurm and local-slurm
-```
+There is a live column for every stack in `tests/integration/stacks.yml` whose backend this
+version of interCEde provides, built from the stack's own `intercede-client.toml`. The stacks are
+started the way `docs/dev/how-to/run-integration-tests-locally.md` starts them
+(`docker compose -f tests/integration/stacks/<stack>/compose.yml up --wait`), or all at once with
+`pixi run demo --up`.
 
 A column whose stack is not running says so, shows that command and has a button that runs it. The
 app checks every 5 s and rebuilds a column when its stack comes back, with the credentials the
 stack minted at its start.
+
+A backend added to interCEde, with its stack, appears on the board, in the dry run and in every
+scene without a change to the demo: nothing in the demo names a backend
+(`demo/tests/test_generic.py` checks that).
 
 ## Presenting
 
@@ -54,10 +56,10 @@ every badge says REPLAY.
 |---|---|---|
 | 0–2 | 1 Architecture | The problem: one WMS, many kinds of resource. Click `submit()` and `Diagnosable` to show the essential and the optional capabilities, straight from the docstrings. |
 | 2–3 | 2 Composition | N transports + M schedulers, not N × M classes. Green cells run in CI. |
-| 3–5 | 3 Translation | Edit the spec: the same one becomes a submit description and a job array. Click *In a container*, *URL input*, *Outputs by pattern*: each backend refuses what it cannot honour, before anything runs. |
-| 5–9 | 4 Job board | Submit the quick job to all four. Same consumer code, four dialects. Submit *30 s with progress*; on the Fake, select one and press Diagnostics; on a real backend, the same button says the backend is not `Diagnosable`. Get output, then kill. |
+| 3–5 | 3 Translation | Edit the spec: the same one becomes what each backend sends, in its own dialect. Click *In a container*, *URL input*, *Outputs by pattern*: each backend refuses what it cannot honour, before anything runs. |
+| 5–9 | 4 Job board | Submit the quick job to every column. Same consumer code, a dialect per backend. Submit *30 s with progress*; on the Fake, select one and press Diagnostics; on a real backend, the same button says the backend is not `Diagnosable`. Get output, then kill. |
 | 9–10 | 5 Trace | *Compare the latest submit on two backends*: the top is the same, the bottom is completely different. Click an arrow to show the argv, the staged files, the token request. |
-| 10–11 | 6 Normalisation | *Status*: condor_q's JSON and squeue's rows on the left, the same `Mapping[JobHandle, JobStatus]` on the right; the marked value and the rule under it show how each became a status. Then *Submit* and *Kill*. |
+| 10–11 | 6 Normalisation | *Status*: each resource's own answer on the left (a tool's output, a response body), the same `Mapping[JobHandle, JobStatus]` on the right. Then *Submit* and *Kill*. |
 | 11–12 | 7 Lifecycle | Show the handle going into the database. *Restart interCEde*: a new backend finds every job from the stored handles alone. *Forged handle*: UNKNOWN, never dropped. |
 | 12–14 | 8 Partial failure | *Some copies refused*, then *Whole resource down* (raises) against *Per-job failures* (does not), then *Kill running and finished jobs* on a real backend. |
 | 14–15 | 9 Verified | Press *Check the latest CI runs*: every stack × version runs the same contract suite on every pull request. |
@@ -102,36 +104,41 @@ resets and leaves the snapshot as it was; `GITHUB_TOKEN=<any GitHub token>` rais
 
 ## How it is instrumented
 
-Nothing under `src/` is changed or reimplemented. Every status, handle, command line and outcome
-shown in Live comes from a real call into interCEde. The demo wraps the real objects by
-composition, at these seams (`demo/tracing.py`, `demo/columns.py`):
+Nothing under `src/` is changed or reimplemented. Every status, handle, command line, request and
+outcome shown in Live comes from a real call into interCEde. Which backends there are, and how each
+is built, comes from the stacks' configuration, the registry and the configuration models
+(`demo/build.py`). The demo watches the real objects at these seams:
 
 - **The backend**, as the consumer sees it. Since Python 3.12, `isinstance` on a
   `runtime_checkable` protocol looks attributes up statically, so a delegating `__getattr__`
   would satisfy no protocol at all. `traced_backend` therefore builds the wrapper class per
-  backend, with exactly the operations the backend has: a wrapped `BatchBackend` is no more
-  `Diagnosable` than the real one, and the board's capability chips are those `isinstance` checks.
-- **Batch:** the registry's own classes (`registry._load`), composed the way `registry._build`
-  composes them: `BatchBackend.from_settings(settings, transport=TracingTransport(…),
-  scheduler=TracingScheduler(…))`, after the same `registry._checked` protocol checks. The traced
+  backend, with exactly the operations the backend has, and the board's capability chips are
+  those `isinstance` checks.
+- **A composed backend** (a configuration with a transport and a scheduler): the registry's own
+  classes, composed the way `registry._build` composes them, after the same `registry._checked`
+  protocol checks, with the transport and the scheduler wrapped at their protocols. The traced
   transport records every argv and every file `put` stages; the traced scheduler records each
   command it builds and each parse.
-- **HTCondor-CE:** the registry's class, built with `runner=TracingRunner(run_process)`. The
-  runner is the one callable every `condor_*` tool runs through, so the trace has each tool's
-  argv, the submit description, and the output. Of the environment it receives (all of
-  `os.environ`), only `CONDOR_CONFIG` and `_CONDOR_*` are recorded.
+- **Any other backend** is built by `registry.get_backend`, exactly as a consumer builds it. What
+  it sends to its resource is seen where it leaves the process (`demo/doors.py`): a program it
+  runs (its argv, the files named on it, the environment it chose, its output) and an HTTP request
+  it makes (its method, path and body, and the answer). The watchers change nothing on the way.
+  A backend that reaches its resource another way still runs; its calls below the provider are
+  just not drawn.
 - **The credential provider:** `TracingProvider` around `StaticCredentials`, holding what the
   stack minted, read with the integration suite's own readers (`tests/integration/conftest.py`).
-  It shows when a backend asks, for what kind and with which scopes.
-- **local + Slurm** must run where Slurm is, as the integration suite does (`exec_in_container`).
-  `demo/agent.py` is started with `docker compose exec` in the Slurm container, runs a real
-  `BatchBackend` (local transport, Slurm) built and traced the same way, and passes its trace
-  steps back over stdin/stdout. On this host `AgentBackend` forwards the consumer's calls. The
-  payload script and the collected files cross that pipe too, since the container has neither.
-- **Scene 3 (DRY RUN):** no pure function in interCEde gives an HTCondor submit description; the
-  backend's `submit()` assembles it. So the real `submit()` of each backend runs against a recorder
-  at the lowest seam (a runner that reads the description, a transport that keeps what `put`
-  stages) and is answered with made-up job IDs that are thrown away (`demo/dryrun.py`).
+  It shows when a backend asks, for what kind and with which scopes. A TLS stack's CA is trusted
+  through `X509_CERT_DIR`, as the integration suite trusts it.
+- **A stack marked `exec_in_container`** is run where the integration suite runs it.
+  `demo/agent.py` is started with `docker compose exec` in the stack's container, builds that
+  stack's backend the same way, and passes its trace steps back over stdin/stdout. On this host
+  `AgentBackend` forwards the consumer's calls. The payload script and the collected files cross
+  that pipe too, since the container has neither.
+- **Scene 3 (DRY RUN):** the real `submit()` of each backend runs, built the same way, with the
+  resource replaced: a composed backend's transport by a recorder, and for any other backend the
+  doors stand in (`demo/dryrun.py`). Every call is recorded and answered with nothing, so
+  `submit()` stops at the first answer it needs, after sending what it would send. While a dry run
+  goes, no connection can leave the process at all (an audit hook).
 
 What is not read from the code: the payload scripts, the scenario scripts (`demo/scenarios.py`),
 and where the state machine's states are drawn (the states themselves come from `JobStatus`; one
@@ -153,18 +160,18 @@ pixi run -e demo demo-test
 ```
 
 They check that the tracing wrappers pass exactly the protocol checks of what they wrap, that a
-recording round-trips and replays behind the gate, and that no credential or per-copy secret
-reaches a recording. The library's own suite does not collect them (`testpaths = ["tests"]`).
+recording round-trips and replays behind the gate, that no credential or per-copy secret reaches a
+recording, and that the demo names no backend: every provided stack is a column and a dry-run
+target, without the demo knowing it. The library's own suite does not collect them (`testpaths = ["tests"]`).
 
 ## What the demo shows about the library
 
-- Only the Fake implements `Diagnosable`; `BatchBackend` and `HTCondorCEBackend` do not, and the
-  board shows that instead of calling them.
-- "SSH via a jump host" is the `jump_host` field of `BatchSSHConfig`, not a transport of its own.
-  No CI stack uses it yet, so scene 2 marks it implemented, not verified.
-- HTCondor-CE selects outputs by name and refuses a pattern, so the shared payload names its
-  output files.
-- `arc-slurm` is listed in `stacks.yml` without a stack folder; scenes 2 and 8 say so.
+- The capability chips are the protocols each backend satisfies: a backend without
+  `Diagnosable` shows that instead of being called.
+- "SSH via a jump host" is the `jump_host` field of a composed configuration, not a transport of
+  its own; scene 2 marks it implemented until a CI stack uses it.
+- What a backend cannot honour is refused at submit, before anything is sent; scene 3 shows each
+  backend's refusal next to the others' translations.
 
 ## Layout
 
@@ -172,8 +179,9 @@ reaches a recording. The library's own suite does not collect them (`testpaths =
 |---|---|
 | `app.py`, `__main__.py` | the server: one event stream (SSE), the presenter's actions |
 | `events.py` | the bus, and the redaction on it |
-| `tracing.py` | the tracing wrappers |
-| `columns.py`, `agent.py` | the backends on the board, built from the stacks' configuration |
+| `tracing.py`, `doors.py` | the tracing wrappers, and the watchers where a backend reaches its resource |
+| `build.py` | which backends there are, and how each is built, from the stacks and the code |
+| `columns.py`, `agent.py` | the columns on the board, and running one inside its stack's container |
 | `consumer.py` | the consumer code shown on the board, the same for every backend |
 | `board.py`, `payloads.py`, `scenarios.py` | the board, its payloads, the scripted scenes |
 | `views.py`, `dryrun.py` | the views read from the code, and the dry run |

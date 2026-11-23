@@ -1,13 +1,14 @@
-"""Running a backend where it must run: the ``local-slurm`` column, inside the Slurm container.
+"""Running a backend where it must run: inside its stack's container.
 
-A local transport runs commands on the host interCEde runs on, so local + Slurm
-only works on a machine with Slurm: the stack's container. The integration suite
-runs there for the same reason (``exec_in_container`` in stacks.yml).
+A stack marked ``exec_in_container`` in stacks.yml is tested from inside its
+container, because its backend works only there (a local transport runs commands
+on the host interCEde runs on). The demo runs such a column there too.
 
-``python -m demo.agent`` runs inside the container, started with ``docker compose
-exec``, and serves a real ``BatchBackend`` built from the registry (local
-transport, Slurm scheduler), traced with the same wrappers as everywhere else. It
-reads one request per line on stdin and writes replies and trace steps on stdout.
+``python -m demo.agent <stack> <column>`` runs inside the container, started with
+``docker compose exec``, and serves the backend the stack's client configuration
+describes, built as every column is built (``demo/build.py``) and traced with the
+same wrappers. It reads one request per line on stdin and writes replies and
+trace steps on stdout.
 
 ``AgentBackend`` is its other end, on this host: a backend that forwards each
 call over that pipe. It is what the board's consumer code calls, so the
@@ -47,18 +48,15 @@ from intercede.models import (
 # How the agent is started in the stack's container, as its unprivileged user.
 CONTAINER_PYTHON = "/opt/suite/bin/python"
 CONTAINER_PATH = "/intercede/src:/intercede"
-CONFIG = {"kind": "batch", "transport": "local", "scheduler": "slurm"}
 
 
 # -- in the container ------------------------------------------------------------
 
 
-async def serve() -> None:
-    """Serve one BatchBackend over stdin and stdout until stdin closes."""
-    from intercede import registry
-    from intercede._backends.batch.protocols import Scheduler, Transport
+async def serve(stack: str, column: str) -> None:
+    """Serve a stack's backend over stdin and stdout until stdin closes."""
+    from demo import build
     from intercede.auth.providers import StaticCredentials
-    from intercede.config import validate_config
 
     bus = Bus()
     tracer = Tracer(bus)
@@ -69,20 +67,12 @@ async def serve() -> None:
         else None
     )
 
-    settings: Any = validate_config(CONFIG)
-    provider = StaticCredentials()  # a local transport needs no credentials
-    transport = tracing.TracingTransport(
-        registry._load("transport", "local").from_settings(settings, provider), tracer
+    config = build.client_config(stack)
+    build.trust(stack, config)
+    held = [build.credential(stack, config)] if "credentials" in config else []
+    backend = build.build(
+        config["backend"], StaticCredentials(held), tracer, column, "LIVE"
     )
-    scheduler = tracing.TracingScheduler(
-        registry._load("scheduler", "slurm").from_settings(settings), tracer
-    )
-    registry._checked("transport", "local", transport, Transport)
-    registry._checked("scheduler", "slurm", scheduler, Scheduler)
-    inner = registry._load("backend", "batch").from_settings(
-        settings, transport=transport, scheduler=scheduler
-    )
-    backend = tracing.traced_backend(inner, "local-slurm", "LIVE", tracer)
 
     loop = asyncio.get_running_loop()
     reader = asyncio.StreamReader()
@@ -95,6 +85,7 @@ async def serve() -> None:
                 "ready": True,
                 "capabilities": tracing.capabilities(backend),
                 "resource": backend.resource,
+                "class": type(backend.inner).__name__,
             }
         )
         while line := await reader.readline():
@@ -182,14 +173,17 @@ def _write(message: dict[str, Any]) -> None:
 
 
 class AgentBackend:
-    """A BatchBackend in the Slurm container, reached through the agent's pipe."""
+    """A backend in its stack's container, reached through the agent's pipe."""
 
-    # What runs in the container, for the board: this class only carries the calls.
-    shown_class = "BatchBackend (in the Slurm container)"
-
-    def __init__(self, compose_file: Path, tracer: Tracer) -> None:
+    def __init__(
+        self, compose_file: Path, stack: str, column: str, tracer: Tracer
+    ) -> None:
         self._compose = compose_file
+        self._stack = stack
+        self._column = column
         self._tracer = tracer
+        # What runs in the container, for the board: this class only carries the calls.
+        self.shown_class = f"the backend in the {stack} container"
         self._process: asyncio.subprocess.Process | None = None
         self._reader: asyncio.Task[None] | None = None
         self._pending: dict[int, tuple[asyncio.Future[Any], Operation | None]] = {}
@@ -213,6 +207,8 @@ class AgentBackend:
             CONTAINER_PYTHON,
             "-m",
             "demo.agent",
+            self._stack,
+            self._column,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -228,6 +224,7 @@ class AgentBackend:
             )
         hello = json.loads(first)
         self.capabilities, self.resource = hello["capabilities"], hello["resource"]
+        self.shown_class = f"{hello['class']} (in the {self._stack} container)"
         self._reader = asyncio.create_task(self._read())
         return self
 
@@ -337,7 +334,7 @@ class AgentBackend:
     async def _ask(self, op: str, **fields: Any) -> Any:
         if self._process is None or self._process.returncode is not None:
             raise exceptions.ResourceUnavailableError(
-                "the agent in the Slurm container is not running"
+                f"the agent in the {self._stack} container is not running"
             )
         self._next += 1
         future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
@@ -369,11 +366,11 @@ class AgentBackend:
             if not future.done():
                 future.set_exception(
                     exceptions.ResourceUnavailableError(
-                        "the agent in the Slurm container stopped"
+                        f"the agent in the {self._stack} container stopped"
                     )
                 )
         self._pending.clear()
 
 
 if __name__ == "__main__":
-    asyncio.run(serve())
+    asyncio.run(serve(*sys.argv[1:3]))

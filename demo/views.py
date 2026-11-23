@@ -17,7 +17,8 @@ from typing import Any, Protocol, get_args
 
 from tests.integration.generate_matrix import STACKS_DIR
 
-from demo.columns import stacks
+from demo import build
+from demo.build import stacks
 from intercede import config, protocols, registry
 from intercede.auth import protocols as auth_protocols
 
@@ -36,12 +37,6 @@ def _class_of(group: str, name: str) -> Any:
         return registry._load(group, name)
     except Exception:  # a planned entry: nothing to load
         return None
-
-
-def _family(kind: str) -> str:
-    # As the registry's own comment groups them: "batch" is composed, "cloud" is a
-    # provider, every other kind is a monolithic gateway.
-    return {"batch": "composed", "cloud": "provider"}.get(kind, "monolithic")
 
 
 def architecture() -> dict[str, Any]:
@@ -86,7 +81,7 @@ def architecture() -> dict[str, Any]:
         backends.append(
             {
                 "kind": kind,
-                "family": _family(kind),
+                "family": build.family(model),
                 "implemented": cls is not None,
                 "class": cls.__name__ if cls else None,
                 "doc": _doc(cls) if cls else _doc(model),
@@ -108,19 +103,15 @@ _ORDER = ["submit", "get_status", "get_output", "kill", "purge", "get_diagnostic
 
 def composition() -> dict[str, Any]:
     available = registry.available()
-    transports = sorted(
-        {
-            t
-            for model in (config.BatchLocalConfig, config.BatchSSHConfig)
-            for t in _choices(model, "transport")
-        }
-    )
-    schedulers = _choices(config.BatchLocalConfig, "scheduler")
+    models = build.composed_models()
+    transports = sorted({t for model in models for t in _choices(model, "transport")})
+    schedulers = sorted({s for model in models for s in _choices(model, "scheduler")})
     verified = _verified()
     rows = []
     for transport in transports:
-        variants = [(transport, None)]
-        if transport == "ssh" and "jump_host" in config.BatchSSHConfig.model_fields:
+        model = next(m for m in models if transport in _choices(m, "transport"))
+        variants: list[tuple[str, str | None]] = [(transport, None)]
+        if "jump_host" in model.model_fields:  # type: ignore[attr-defined]
             variants.append((transport, "jump_host"))
         for name, variant in variants:
             cls = (
@@ -133,7 +124,7 @@ def composition() -> dict[str, Any]:
                     "label": f"{name} via a jump host" if variant else name,
                     "class": cls.__name__ if cls else None,
                     "doc": (
-                        config.BatchSSHConfig.model_fields["jump_host"].description
+                        model.model_fields["jump_host"].description  # type: ignore[attr-defined]
                         or ""
                     )
                     if variant
@@ -174,7 +165,11 @@ def composition() -> dict[str, Any]:
             else "planned"
         )
     listed_without_folder = [s for s in stacks() if not (STACKS_DIR / s).is_dir()]
+    composed_kinds = {k for m in models for k in _choices(m, "kind")}
     return {
+        "composed_class": " / ".join(
+            sorted(c.__name__ for k in composed_kinds if (c := _class_of("backend", k)))
+        ),
         "transports": rows,
         "schedulers": columns,
         "others": monolithic,
@@ -205,7 +200,7 @@ def _verified() -> dict[tuple[str, str | None, str | None], list[str]]:
         if not path.is_file():
             continue
         backend = tomllib.loads(path.read_text())["backend"]
-        if backend["kind"] == "batch":
+        if "transport" in backend and "scheduler" in backend:  # composed
             key = (
                 backend["transport"],
                 backend["scheduler"],

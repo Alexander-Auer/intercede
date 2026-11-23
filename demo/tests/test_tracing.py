@@ -4,33 +4,23 @@ from __future__ import annotations
 
 import pytest
 
+from demo import dryrun
+from demo.build import build
 from demo.events import Bus
 from demo.tracing import (
     CAPABILITIES,
     Tracer,
     TracingProvider,
-    TracingRunner,
-    TracingScheduler,
-    TracingTransport,
     capabilities,
     traced_backend,
 )
-from intercede import JobBackend, registry
-from intercede._backends.batch.protocols import Scheduler, Transport
+from intercede import JobBackend
 from intercede._backends.fake import FakeBackend
-from intercede._backends.monolith.htcondorce.process import run_process
 from intercede.auth.protocols import CredentialProvider
 from intercede.auth.providers import StaticCredentials
-from intercede.config import validate_config
 
-SSH = {
-    "kind": "batch",
-    "transport": "ssh",
-    "scheduler": "slurm",
-    "host": "login.example.org",
-    "user": "dirac",
-    "known_hosts": "login.example.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA",
-}
+# Every backend the stacks configure, as the dry run builds it.
+TARGETS = dryrun.targets()
 
 
 @pytest.fixture
@@ -44,46 +34,13 @@ def test_a_traced_fake_has_every_capability(tracer: Tracer):
     assert isinstance(traced, JobBackend)
 
 
-def test_a_traced_backend_claims_no_capability_it_lacks(tracer: Tracer):
-    settings = validate_config(SSH)
-    provider = TracingProvider(StaticCredentials(), tracer)
-    transport = TracingTransport(
-        registry._load("transport", "ssh").from_settings(settings, provider), tracer
-    )
-    scheduler = TracingScheduler(
-        registry._load("scheduler", "slurm").from_settings(settings), tracer
-    )
-    inner = registry._load("backend", "batch").from_settings(
-        settings, transport=transport, scheduler=scheduler
-    )
-    traced = traced_backend(inner, "ssh-slurm", "LIVE", tracer)
-    assert capabilities(traced) == capabilities(inner)
-    # BatchBackend has no live diagnostics, so neither may its wrapper.
-    assert "Diagnosable" not in capabilities(traced)
-
-
-def test_the_parts_pass_the_registrys_own_checks(tracer: Tracer):
-    settings = validate_config(SSH)
+@pytest.mark.parametrize("name", sorted(TARGETS))
+def test_a_traced_backend_claims_no_capability_it_lacks(tracer: Tracer, name: str):
     provider = TracingProvider(StaticCredentials(), tracer)
     assert isinstance(provider, CredentialProvider)
-    transport = TracingTransport(
-        registry._load("transport", "ssh").from_settings(settings, provider), tracer
-    )
-    scheduler = TracingScheduler(
-        registry._load("scheduler", "slurm").from_settings(settings), tracer
-    )
-    assert registry._checked("transport", "ssh", transport, Transport) is transport
-    assert registry._checked("scheduler", "slurm", scheduler, Scheduler) is scheduler
-
-
-def test_the_htcondor_backend_takes_the_traced_runner(tracer: Tracer):
-    settings = validate_config(
-        {"kind": "htcondor-ce", "endpoint": "ce.example.org:9619"}
-    )
-    backend = registry._load("backend", "htcondor-ce")(
-        settings, StaticCredentials(), runner=TracingRunner(run_process, tracer)
-    )
-    assert isinstance(traced_backend(backend, "htcondor", "LIVE", tracer), JobBackend)
+    traced = build(TARGETS[name][1], provider, tracer, name, "LIVE")
+    assert isinstance(traced, JobBackend)
+    assert capabilities(traced) == capabilities(traced.inner)
 
 
 async def test_each_call_is_one_operation(tracer: Tracer):

@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from demo import consumer, dryrun, views
+from demo import consumer, doors, dryrun, views
 from demo.board import Board
 from demo.columns import Columns, compose_file, stacks
 from demo.events import Bus
@@ -27,8 +27,6 @@ from demo.scenarios import SCENARIOS, Scenarios
 from demo.scripts import fetch_ci
 from demo.tracing import Tracer
 from intercede import JobStatus
-from intercede._backends._htcondor import status as htcondor_status
-from intercede._backends._slurm import status as slurm_status
 
 HERE = Path(__file__).parent
 STATIC = HERE / "static"
@@ -83,6 +81,7 @@ async def _refresh_forever(state: State) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    doors.install()  # what each backend sends to its resource is seen where it leaves
     state = State()
     app.state.demo = state
     await state.columns.start()
@@ -146,17 +145,6 @@ async def meta() -> dict[str, Any]:
         ],
         "statuses": [status.value for status in JobStatus],
         "consumer": {"path": "demo/consumer.py", "source": inspect.getsource(consumer)},
-        # How each tool's states become a JobStatus, read from the backends' own tables.
-        "mappings": {
-            "slurm": {
-                state: str(status) for state, status in slurm_status._STATES.items()
-            },
-            "htcondor": {
-                str(code): str(status)
-                for code, status in htcondor_status._STATES.items()
-            },
-            "htcondor_finished": inspect.getdoc(htcondor_status._result),
-        },
         "scenarios": [
             {"name": name, "title": title, "needs": needs}
             for name, (title, needs) in SCENARIOS.items()

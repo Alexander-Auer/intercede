@@ -147,9 +147,8 @@ def test_a_file_that_is_not_a_recording_is_refused(recordings_here: Path):
 
 
 def test_the_dry_run_builds_backends_from_the_registry():
-    assert set(dryrun.TARGETS) == {"htcondor-ce", "slurm"}
-    for config in dryrun.TARGETS.values():
-        assert registry.available()["backend"]  # the classes it loads are registered
+    assert dryrun.targets()
+    for _, config in dryrun.targets().values():
         assert config["kind"] in registry.available()["backend"]
 
 
