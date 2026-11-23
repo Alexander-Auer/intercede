@@ -3,6 +3,8 @@
 ``FakeARC`` answers the way ARC 7.2 does (checked against the arc-slurm stack):
 one entry per job with its own status code, 404 for a job it does not know,
 and HTTP 500 "User can't be assigned configuration" for a token it refuses.
+A kill of a job that has ended is accepted and does nothing; a clean of a job
+that is still active waits until it has ended.
 It runs behind httpx's ``MockTransport``, so no network is involved.
 """
 
@@ -29,6 +31,7 @@ API = "/arex/rest/1.1/"
 ON_THE_WORKER = "/opt/worker-only/bin/run"
 SPEC = SubmissionSpec(executable=ON_THE_WORKER)
 NO_CONFIGURATION = "User can't be assigned configuration"
+ENDED = frozenset({"FINISHED", "FAILED", "KILLED", "WIPED"})
 
 
 class ScopedTokens:
@@ -57,6 +60,7 @@ class FakeJob:
     description: ElementTree.Element
     state: str = "ACCEPTING"
     files: dict[str, bytes] = field(default_factory=dict)
+    clean_when_ended: bool = False
 
     def texts(self, tag: str) -> list[str]:
         """Return the text of every element named ``tag`` in the description."""
@@ -82,7 +86,7 @@ class FakeJob:
 
 
 class FakeARC(httpx.MockTransport):
-    """Plays A-REX's REST interface: create, status, kill, and uploads."""
+    """Plays A-REX's REST interface: create, status, kill, clean, and uploads."""
 
     def __init__(self) -> None:
         super().__init__(self._handle)
@@ -91,6 +95,7 @@ class FakeARC(httpx.MockTransport):
         self.refuse_token = False  # answer every request as a refused token
         self.refused_copies: set[int] = set()  # descriptions the CE refuses
         self.failing_uploads: set[str] = set()  # names whose upload fails
+        self.refused_kills: set[str] = set()  # jobs the CE will not kill
         self.answer: httpx.Response | None = None  # forced answer to everything
         self.closed = 0
 
@@ -181,10 +186,29 @@ class FakeARC(httpx.MockTransport):
                         "state": job.state,
                     }
                 )
+            elif action == "kill" and job_id in self.refused_kills:
+                entries.append(
+                    {"status-code": "500", "reason": "Internal error", "id": job_id}
+                )
             elif action == "kill":
-                job.state = "KILLING"
+                if job.state not in ENDED:
+                    job.state = "KILLING"
+                    if job.clean_when_ended:  # it is cleaned once it has stopped
+                        del self.jobs[job_id]
                 entries.append(
                     {"status-code": "202", "reason": "Queued for killing", "id": job_id}
+                )
+            elif action == "clean":
+                if job.state in ENDED:
+                    del self.jobs[job_id]
+                else:
+                    job.clean_when_ended = True
+                entries.append(
+                    {
+                        "status-code": "202",
+                        "reason": "Queued for cleaning",
+                        "id": job_id,
+                    }
                 )
         return httpx.Response(201, json={"job": entries})
 

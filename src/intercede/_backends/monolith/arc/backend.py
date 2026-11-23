@@ -11,7 +11,7 @@ import httpx
 
 from intercede._backends._arc import rest, status
 from intercede._backends._arc.description import render
-from intercede._backends.common import copies_of
+from intercede._backends.common import ACTIVE, copies_of
 from intercede._backends.credentials import (
     CANCEL_SCOPES,
     READ_SCOPES,
@@ -32,11 +32,12 @@ from intercede.models import (
     JobHandle,
     JobID,
     JobStatus,
+    OpOutcome,
     StatusMap,
     Submission,
     SubmissionSpec,
 )
-from intercede.protocols import JobBackend
+from intercede.protocols import JobBackend, Killable, Purgeable
 
 BACKEND = "arc"
 PARALLEL_TRANSFERS = 4
@@ -47,7 +48,7 @@ _CREATE_SCOPES = SUBMIT_SCOPES | {"compute.modify"}
 
 
 class ARCBackend:
-    """An ARC CE: submit and status.
+    """An ARC CE: submit, status, kill and purge.
 
     It has no live diagnostics (issue #22); ``Diagnosable`` is absent on purpose.
     """
@@ -207,13 +208,7 @@ class ARCBackend:
 
     async def get_status(self, handles: Sequence[JobHandle]) -> StatusMap:
         self._check_usable()
-        ids = self._ids(handles)
-        states: dict[str, JobStatus] = {}
-        if ids:
-            for answer in await self._connection.jobs("status", ids, READ_SCOPES):
-                # A job the CE does not know is answered with 404, and no state.
-                if answer.ok and answer.id is not None and answer.state is not None:
-                    states[answer.id] = status.job_status(answer.state)
+        states = await self._states(self._ids(handles))
         return {
             handle: states.get(handle.id, JobStatus.UNKNOWN)
             if self._owns(handle)
@@ -221,11 +216,86 @@ class ARCBackend:
             for handle in handles
         }
 
+    # -- Killable --------------------------------------------------------------
+
+    async def kill(
+        self, handles: Sequence[JobHandle]
+    ) -> Mapping[JobHandle, OpOutcome[None]]:
+        self._check_usable()
+        # A-REX accepts a kill for a job that has ended too, and does nothing
+        # with it: only the state tells a finished job from a cancelled one.
+        states = await self._states(self._ids(handles))
+        active = [job for job, state in states.items() if state in ACTIVE]
+        killed = await self._ask("kill", active, CANCEL_SCOPES)
+        outcomes: dict[JobHandle, OpOutcome[None]] = {}
+        for handle in handles:
+            if not self._owns(handle) or handle.id not in states:
+                outcomes[handle] = _UNKNOWN_JOB
+            elif handle.id in active:
+                outcomes[handle] = _done(killed.get(handle.id))
+            else:
+                outcomes[handle] = OpOutcome[None](ok=True, reason="already finished")
+        return outcomes
+
+    # -- Purgeable -------------------------------------------------------------
+
+    async def purge(
+        self, handles: Sequence[JobHandle]
+    ) -> Mapping[JobHandle, OpOutcome[None]]:
+        self._check_usable()
+        states = await self._states(self._ids(handles))
+        active = [job for job, state in states.items() if state in ACTIVE]
+        killed = await self._ask("kill", active, CANCEL_SCOPES)
+        # A-REX keeps a clean of a job that is still active until it has ended,
+        # so a job cancelled here goes once it has stopped. One that could not
+        # be cancelled keeps its files.
+        refused = {job for job in active if not _done(killed.get(job)).ok}
+        cleaned = await self._ask(
+            "clean", [job for job in states if job not in refused], CANCEL_SCOPES
+        )
+        outcomes: dict[JobHandle, OpOutcome[None]] = {}
+        for handle in handles:
+            if not self._owns(handle):
+                outcomes[handle] = _UNKNOWN_JOB
+            elif handle.id not in states:
+                # Purged before, or never known: either way nothing is left.
+                outcomes[handle] = _NOTHING_LEFT
+            elif handle.id in refused:
+                outcomes[handle] = _done(killed.get(handle.id))
+            else:
+                outcome = _done(cleaned.get(handle.id))
+                if outcome.ok and handle.id in active:
+                    outcome = OpOutcome[None](
+                        ok=True, reason="cancelled; released once it has stopped"
+                    )
+                elif outcome.reason == _UNKNOWN_JOB.reason:
+                    outcome = _NOTHING_LEFT
+                outcomes[handle] = outcome
+        return outcomes
+
     # -- helpers -------------------------------------------------------------
 
     def _check_usable(self) -> None:
         if self._closed:
             raise InterCEdeError("backend is closed")
+
+    async def _ask(
+        self, action: str, ids: Sequence[str], scopes: frozenset[str]
+    ) -> dict[str, rest.JobAnswer]:
+        """Ask the CE to do ``action`` for each job of ``ids``; its answers by job."""
+        if not ids:
+            return {}
+        answers = await self._connection.jobs(action, ids, scopes)
+        return {answer.id: answer for answer in answers if answer.id is not None}
+
+    async def _states(self, ids: Sequence[str]) -> dict[str, JobStatus]:
+        """Return the state of each job the CE knows; it answers 404 for the others."""
+        answers = await self._ask("status", ids, READ_SCOPES)
+        return {
+            job: status.job_status(answer.state)
+            for job, answer in answers.items()
+            if answer.ok and answer.state is not None
+        }
 
     def _owns(self, handle: JobHandle) -> bool:
         return (
@@ -244,8 +314,29 @@ class ARCBackend:
         )
 
 
+_UNKNOWN_JOB = OpOutcome[None](ok=False, reason="unknown job")
+_NOTHING_LEFT = OpOutcome[None](
+    ok=True, reason="the CE no longer knows the job; nothing is left to release"
+)
+
+
+def _done(answer: rest.JobAnswer | None) -> OpOutcome[None]:
+    """Read the CE's answer to a kill or a clean of one job."""
+    if answer is None:
+        return OpOutcome[None](ok=False, reason="the CE did not answer for this job")
+    if answer.ok:
+        return OpOutcome[None](ok=True)
+    if answer.code == httpx.codes.NOT_FOUND:
+        return _UNKNOWN_JOB
+    return OpOutcome[None](
+        ok=False, reason=f"the CE refused it: {answer.code} {answer.reason}".rstrip()
+    )
+
+
 # The type checker proves conformance.
 _backend: type[JobBackend] = ARCBackend
+_killable: type[Killable] = ARCBackend
+_purgeable: type[Purgeable] = ARCBackend
 _built_by_registry: Callable[[ARCConfig, CredentialProvider], JobBackend] = (
     ARCBackend.from_settings
 )

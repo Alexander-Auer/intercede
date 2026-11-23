@@ -22,6 +22,7 @@ from intercede import (
     JobHandle,
     JobID,
     JobStatus,
+    OpOutcome,
     OutputMember,
     OutputSpec,
     Resources,
@@ -249,3 +250,60 @@ class TestErrors:
         arc.answer = httpx.Response(201, text="<html>a proxy's error page</html>")
         with pytest.raises(ResourceUnavailableError, match="not ARC's"):
             await ce.get_status([HANDLE])
+
+
+class TestKillAndPurge:
+    async def test_a_finished_job_is_left_alone(self, ce: ARCBackend, arc: FakeARC):
+        # A-REX accepts a kill for a job that has ended, so none is sent.
+        handle = (await ce.submit(SPEC)).handles[0]
+        (job,) = arc.created()
+        job.state = "FINISHED"
+        outcome = (await ce.kill([handle]))[handle]
+        assert outcome.ok and outcome.reason == "already finished"
+        assert "kill" not in arc.actions()
+
+    async def test_each_job_gets_its_own_outcome(self, ce: ARCBackend, arc: FakeARC):
+        first, second = (await ce.submit(SPEC, 2)).handles.values()
+        arc.refused_kills = {second.id}
+        outcomes = await ce.kill([first, second, HANDLE])
+        assert outcomes[first].ok
+        assert not outcomes[second].ok
+        assert outcomes[second].reason == "the CE refused it: 500 Internal error"
+        assert outcomes[HANDLE] == OpOutcome[None](ok=False, reason="unknown job")
+
+    async def test_an_active_job_is_cancelled_and_released_once_it_stops(
+        self, ce: ARCBackend, arc: FakeARC
+    ):
+        handle = (await ce.submit(SPEC)).handles[0]
+        outcome = (await ce.purge([handle]))[handle]
+        assert (
+            outcome.ok and outcome.reason == "cancelled; released once it has stopped"
+        )
+        (job,) = arc.created()
+        assert (job.state, job.clean_when_ended) == ("KILLING", True)
+
+    async def test_a_job_that_cannot_be_cancelled_keeps_its_files(
+        self, ce: ARCBackend, arc: FakeARC
+    ):
+        handle = (await ce.submit(SPEC)).handles[0]
+        arc.refused_kills = {handle.id}
+        outcome = (await ce.purge([handle]))[handle]
+        assert not outcome.ok and "500 Internal error" in (outcome.reason or "")
+        assert "clean" not in arc.actions()
+
+    async def test_purging_twice_is_harmless(self, ce: ARCBackend, arc: FakeARC):
+        handle = (await ce.submit(SPEC)).handles[0]
+        (job,) = arc.created()
+        job.state = "FINISHED"
+        assert (await ce.purge([handle]))[handle] == OpOutcome[None](ok=True)
+        again = (await ce.purge([handle]))[handle]
+        assert again.ok and again.reason and "nothing is left" in again.reason
+
+    @pytest.mark.parametrize("operation", ["kill", "purge"])
+    async def test_a_foreign_handle_never_reaches_a_request(
+        self, ce: ARCBackend, arc: FakeARC, operation: str
+    ):
+        theirs = HANDLE.model_copy(update={"id": "../../info"})
+        outcome = (await getattr(ce, operation)([theirs]))[theirs]
+        assert not outcome.ok and outcome.reason == "unknown job"
+        assert arc.requests == []
