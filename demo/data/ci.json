@@ -1,17 +1,151 @@
 {
- "fetched_at": "2026-11-17T13:09:41+00:00",
+ "fetched_at": "2026-11-23T15:48:58+00:00",
  "workflow": "integration.yml",
  "axes": [
+  "arc-slurm / basic / latest",
   "htcondor / basic / lts",
   "htcondor / basic / latest",
   "ssh-slurm / basic / latest",
   "local-slurm / basic / latest"
  ],
- "not_ready": [
-  "arc-slurm"
- ],
+ "not_ready": [],
  "repositories": {
   "DIRACGrid/intercede": [
+   {
+    "id": 45167240576,
+    "number": 61,
+    "branch": "stack/htcondor-6-contract-suite",
+    "event": "pull_request",
+    "created": "2026-11-23T11:40:05Z",
+    "url": "https://github.com/DIRACGrid/intercede/actions/runs/45167240576",
+    "conclusion": "success",
+    "jobs": {
+     "matrix": "success",
+     "htcondor / basic / latest": "success",
+     "htcondor / basic / lts": "success"
+    }
+   },
+   {
+    "id": 45167238179,
+    "number": 60,
+    "branch": "stack/htcondor-5-output",
+    "event": "pull_request",
+    "created": "2026-11-23T11:40:04Z",
+    "url": "https://github.com/DIRACGrid/intercede/actions/runs/45167238179",
+    "conclusion": "success",
+    "jobs": {
+     "matrix": "success",
+     "htcondor / basic / latest": "success",
+     "htcondor / basic / lts": "success"
+    }
+   },
+   {
+    "id": 45167237993,
+    "number": 59,
+    "branch": "stack/htcondor-3-submit-status",
+    "event": "pull_request",
+    "created": "2026-11-23T11:40:04Z",
+    "url": "https://github.com/DIRACGrid/intercede/actions/runs/45167237993",
+    "conclusion": "success",
+    "jobs": {
+     "matrix": "success",
+     "htcondor / basic / latest": "success",
+     "htcondor / basic / lts": "success"
+    }
+   },
+   {
+    "id": 45167237254,
+    "number": 58,
+    "branch": "stack/htcondor-4-kill-purge",
+    "event": "pull_request",
+    "created": "2026-11-23T11:40:04Z",
+    "url": "https://github.com/DIRACGrid/intercede/actions/runs/45167237254",
+    "conclusion": "success",
+    "jobs": {
+     "matrix": "success",
+     "htcondor / basic / lts": "success",
+     "htcondor / basic / latest": "success"
+    }
+   },
+   {
+    "id": 45167237118,
+    "number": 57,
+    "branch": "stack/htcondor-1-core",
+    "event": "pull_request",
+    "created": "2026-11-23T11:40:04Z",
+    "url": "https://github.com/DIRACGrid/intercede/actions/runs/45167237118",
+    "conclusion": "success",
+    "jobs": {
+     "matrix": "success",
+     "${{ matrix.stack }} / ${{ matrix.config }} / ${{ matrix.version }}": "skipped"
+    }
+   },
+   {
+    "id": 45167236619,
+    "number": 56,
+    "branch": "stack/htcondor-2-integration-stack",
+    "event": "pull_request",
+    "created": "2026-11-23T11:40:04Z",
+    "url": "https://github.com/DIRACGrid/intercede/actions/runs/45167236619",
+    "conclusion": "success",
+    "jobs": {
+     "matrix": "success",
+     "htcondor / basic / lts": "success",
+     "htcondor / basic / latest": "success"
+    }
+   },
+   {
+    "id": 44510980486,
+    "number": 55,
+    "branch": "bandit",
+    "event": "pull_request",
+    "created": "2026-11-19T11:01:18Z",
+    "url": "https://github.com/DIRACGrid/intercede/actions/runs/44510980486",
+    "conclusion": "success",
+    "jobs": {
+     "matrix": "success",
+     "${{ matrix.stack }} / ${{ matrix.config }} / ${{ matrix.version }}": "skipped"
+    }
+   },
+   {
+    "id": 44491553455,
+    "number": 54,
+    "branch": "renovate/python-3.x",
+    "event": "pull_request",
+    "created": "2026-11-19T08:54:05Z",
+    "url": "https://github.com/DIRACGrid/intercede/actions/runs/44491553455",
+    "conclusion": "success",
+    "jobs": {
+     "matrix": "success",
+     "${{ matrix.stack }} / ${{ matrix.config }} / ${{ matrix.version }}": "skipped"
+    }
+   },
+   {
+    "id": 44163154773,
+    "number": 53,
+    "branch": "renovate/github-actions",
+    "event": "pull_request",
+    "created": "2026-11-17T19:51:56Z",
+    "url": "https://github.com/DIRACGrid/intercede/actions/runs/44163154773",
+    "conclusion": "success",
+    "jobs": {
+     "matrix": "success",
+     "${{ matrix.stack }} / ${{ matrix.config }} / ${{ matrix.version }}": "skipped"
+    }
+   },
+   {
+    "id": 44130151661,
+    "number": 52,
+    "branch": "pixi-exclude-newer",
+    "event": "pull_request",
+    "created": "2026-11-17T16:49:34Z",
+    "url": "https://github.com/DIRACGrid/intercede/actions/runs/44130151661",
+    "conclusion": "success",
+    "jobs": {
+     "matrix": "success",
+     "${{ matrix.stack }} / ${{ matrix.config }} / ${{ matrix.version }}": "skipped"
+    }
+   },
    {
     "id": 43860486706,
     "number": 51,
@@ -39,143 +173,60 @@
      "htcondor / basic / latest": "success",
      "htcondor / basic / lts": "success"
     }
-   },
-   {
-    "id": 43860388018,
-    "number": 49,
-    "branch": "stack/htcondor-4-kill-purge",
-    "event": "pull_request",
-    "created": "2026-11-16T11:44:27Z",
-    "url": "https://github.com/DIRACGrid/intercede/actions/runs/43860388018",
-    "conclusion": "success",
-    "jobs": {
-     "matrix": "success",
-     "htcondor / basic / lts": "success",
-     "htcondor / basic / latest": "success"
-    }
-   },
-   {
-    "id": 43860304986,
-    "number": 48,
-    "branch": "stack/htcondor-3-submit-status",
-    "event": "pull_request",
-    "created": "2026-11-16T11:43:52Z",
-    "url": "https://github.com/DIRACGrid/intercede/actions/runs/43860304986",
-    "conclusion": "success",
-    "jobs": {
-     "htcondor / basic / latest": "success",
-     "matrix": "success",
-     "htcondor / basic / lts": "success"
-    }
-   },
-   {
-    "id": 43837760501,
-    "number": 47,
-    "branch": "stack/htcondor-2-integration-stack",
-    "event": "pull_request",
-    "created": "2026-11-16T09:13:09Z",
-    "url": "https://github.com/DIRACGrid/intercede/actions/runs/43837760501",
-    "conclusion": "success",
-    "jobs": {
-     "matrix": "success",
-     "htcondor / basic / latest": "success",
-     "htcondor / basic / lts": "success"
-    }
-   },
-   {
-    "id": 43830935729,
-    "number": 46,
-    "branch": "stack/credential-models",
-    "event": "pull_request",
-    "created": "2026-11-16T08:24:23Z",
-    "url": "https://github.com/DIRACGrid/intercede/actions/runs/43830935729",
-    "conclusion": "success",
-    "jobs": {
-     "matrix": "success",
-     "${{ matrix.stack }} / ${{ matrix.config }} / ${{ matrix.version }}": "skipped"
-    }
-   },
-   {
-    "id": 43830932700,
-    "number": 45,
-    "branch": "stack/htcondor-1-core",
-    "event": "pull_request",
-    "created": "2026-11-16T08:24:22Z",
-    "url": "https://github.com/DIRACGrid/intercede/actions/runs/43830932700",
-    "conclusion": "success",
-    "jobs": {
-     "matrix": "success",
-     "${{ matrix.stack }} / ${{ matrix.config }} / ${{ matrix.version }}": "skipped"
-    }
-   },
-   {
-    "id": 43249527201,
-    "number": 44,
-    "branch": "ci/zizmor-auditor",
-    "event": "pull_request",
-    "created": "2026-11-12T15:35:55Z",
-    "url": "https://github.com/DIRACGrid/intercede/actions/runs/43249527201",
-    "conclusion": "success",
-    "jobs": {
-     "matrix": "success",
-     "${{ matrix.stack }} / ${{ matrix.config }} / ${{ matrix.version }}": "skipped"
-    }
-   },
-   {
-    "id": 43116592922,
-    "number": 43,
-    "branch": "renovate/github-actions",
-    "event": "pull_request",
-    "created": "2026-11-11T23:01:51Z",
-    "url": "https://github.com/DIRACGrid/intercede/actions/runs/43116592922",
-    "conclusion": "success",
-    "jobs": {
-     "matrix": "success",
-     "${{ matrix.stack }} / ${{ matrix.config }} / ${{ matrix.version }}": "skipped"
-    }
-   },
-   {
-    "id": 42818281614,
-    "number": 42,
-    "branch": "renovate/github-actions",
-    "event": "pull_request",
-    "created": "2026-11-10T12:44:11Z",
-    "url": "https://github.com/DIRACGrid/intercede/actions/runs/42818281614",
-    "conclusion": "success",
-    "jobs": {
-     "matrix": "success",
-     "${{ matrix.stack }} / ${{ matrix.config }} / ${{ matrix.version }}": "skipped"
-    }
-   },
-   {
-    "id": 42504681518,
-    "number": 41,
-    "branch": "renovate/github-actions",
-    "event": "pull_request",
-    "created": "2026-11-08T17:22:53Z",
-    "url": "https://github.com/DIRACGrid/intercede/actions/runs/42504681518",
-    "conclusion": "success",
-    "jobs": {
-     "matrix": "success",
-     "${{ matrix.stack }} / ${{ matrix.config }} / ${{ matrix.version }}": "skipped"
-    }
-   },
-   {
-    "id": 42223549897,
-    "number": 40,
-    "branch": "stack/htcondor-6-contract-suite",
-    "event": "pull_request",
-    "created": "2026-11-06T13:11:55Z",
-    "url": "https://github.com/DIRACGrid/intercede/actions/runs/42223549897",
-    "conclusion": "success",
-    "jobs": {
-     "matrix": "success",
-     "htcondor / basic / latest": "success",
-     "htcondor / basic / lts": "success"
-    }
    }
   ],
   "Alexander-Auer/intercede": [
+   {
+    "id": 45205748201,
+    "number": 15,
+    "branch": "feat/arc-kill-purge",
+    "event": "pull_request",
+    "created": "2026-11-23T15:29:08Z",
+    "url": "https://github.com/Alexander-Auer/intercede/actions/runs/45205748201",
+    "conclusion": "success",
+    "jobs": {
+     "matrix": "success",
+     "arc-slurm / basic / latest": "success",
+     "htcondor / basic / lts": "success",
+     "local-slurm / basic / latest": "success",
+     "htcondor / basic / latest": "success",
+     "ssh-slurm / basic / latest": "success"
+    }
+   },
+   {
+    "id": 45204251186,
+    "number": 14,
+    "branch": "feat/arc-kill-purge",
+    "event": "pull_request",
+    "created": "2026-11-23T15:21:10Z",
+    "url": "https://github.com/Alexander-Auer/intercede/actions/runs/45204251186",
+    "conclusion": "failure",
+    "jobs": {
+     "matrix": "success",
+     "htcondor / basic / latest": "success",
+     "arc-slurm / basic / latest": "success",
+     "local-slurm / basic / latest": "failure",
+     "ssh-slurm / basic / latest": "success",
+     "htcondor / basic / lts": "success"
+    }
+   },
+   {
+    "id": 45177014834,
+    "number": 13,
+    "branch": "feat/arc-kill-purge",
+    "event": "pull_request",
+    "created": "2026-11-23T12:43:33Z",
+    "url": "https://github.com/Alexander-Auer/intercede/actions/runs/45177014834",
+    "conclusion": "failure",
+    "jobs": {
+     "matrix": "success",
+     "htcondor / basic / latest": "success",
+     "ssh-slurm / basic / latest": "success",
+     "local-slurm / basic / latest": "failure",
+     "arc-slurm / basic / latest": "success",
+     "htcondor / basic / lts": "success"
+    }
+   },
    {
     "id": 41855087277,
     "number": 12,
@@ -304,48 +355,6 @@
      "matrix": "success",
      "htcondor / basic / lts": "success",
      "htcondor / basic / latest": "success"
-    }
-   },
-   {
-    "id": 40324843882,
-    "number": 3,
-    "branch": "feat/HTCondorCEBackend",
-    "event": "pull_request",
-    "created": "2026-10-26T12:44:24Z",
-    "url": "https://github.com/Alexander-Auer/intercede/actions/runs/40324843882",
-    "conclusion": "success",
-    "jobs": {
-     "matrix": "success",
-     "htcondor / basic / lts": "success",
-     "htcondor / basic / latest": "success"
-    }
-   },
-   {
-    "id": 40311420352,
-    "number": 2,
-    "branch": "feat/HTCondorCEBackend",
-    "event": "pull_request",
-    "created": "2026-10-26T10:57:36Z",
-    "url": "https://github.com/Alexander-Auer/intercede/actions/runs/40311420352",
-    "conclusion": "success",
-    "jobs": {
-     "matrix": "success",
-     "htcondor / basic / lts": "success",
-     "htcondor / basic / latest": "success"
-    }
-   },
-   {
-    "id": 40306367907,
-    "number": 1,
-    "branch": "feat/HTCondorCEBackend",
-    "event": "pull_request",
-    "created": "2026-10-26T10:18:26Z",
-    "url": "https://github.com/Alexander-Auer/intercede/actions/runs/40306367907",
-    "conclusion": "success",
-    "jobs": {
-     "matrix": "success",
-     "htcondor / basic / latest": "success",
-     "htcondor / basic / lts": "success"
     }
    }
   ]
