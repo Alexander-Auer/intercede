@@ -22,6 +22,7 @@ license = { text = "GPL-3.0-only" }
 dynamic = ["version"]
 dependencies = [
   "asyncssh>=2.24",
+  "httpx>=0.28",
   "pydantic>=2"
 ]
 classifiers = [
@@ -139,6 +140,9 @@ profile = "black"
 [tool.pixi.workspace]
 channels = ["conda-forge"]
 platforms = ["linux-64", "osx-arm64"]
+# the shared Renovate preset enables lock file maintenance, which skips
+# minimumReleaseAge: enforce the release-age cooldown at solve time
+exclude-newer = "7d"
 
 [tool.pixi.environments]
 default = { features = [], solve-group = "default" }
@@ -148,6 +152,7 @@ py312 = { features = ["testing", "py312"] }
 py313 = { features = ["testing", "py313"] }
 py314 = { features = ["testing", "py314"] }
 docs = { features = ["docs"], solve-group = "default" }
+gha-lint = { features = ["gha-lint"], no-default-feature = true }
 # The presentation app in demo/; not part of the package (see demo/README.md).
 demo = { features = ["testing", "py313", "demo"] }
 
@@ -165,6 +170,15 @@ intercede = { path = ".", editable = true }
 pre-commit = "*"
 [tool.pixi.feature.pre-commit.tasks]
 pre-commit = { cmd = "pre-commit", description = "Run pre-commit" }
+
+
+# Features for running GHA lints (same as diracx)
+[tool.pixi.feature.gha-lint.dependencies]
+zizmor = "*"
+pinact = "*"
+[tool.pixi.feature.gha-lint.tasks]
+gha-zizmor = { cmd = "zizmor .", description = "Run Zizmor GHA analysis" }
+gha-pinact = { cmd = "pinact run", description = "Run Pinact GHA versions update" }
 
 
 # Features for building the documentation

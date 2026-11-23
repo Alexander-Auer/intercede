@@ -12,6 +12,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Self
 
+from intercede._backends.common import ACTIVE, copies_of, is_url, read_input
 from intercede._backends.config import FakeConfig
 from intercede.auth.protocols import CredentialProvider
 from intercede.exceptions import (
@@ -42,11 +43,6 @@ from intercede.protocols import (
 )
 
 BACKEND = "fake"
-_ACTIVE = (JobStatus.SUBMITTED, JobStatus.WAITING, JobStatus.RUNNING)
-
-
-def _is_url(source: str) -> bool:
-    return "://" in source
 
 
 @dataclass
@@ -137,12 +133,7 @@ class FakeBackend:
     ) -> Submission:
         self._check_usable()
         self._check_supported(spec)
-        copy_vars = [CopyVars()] * copies if isinstance(copies, int) else list(copies)
-        for index, copy in enumerate(copy_vars):
-            if clashes := spec.clashes_with(copy):
-                raise SpecificationRejectedError(
-                    f"copy {index}: secrets {sorted(clashes)} are named like inputs"
-                )
+        copy_vars = copies_of(spec, copies)
 
         # File ownership: read local inputs now, so the backend never depends on
         # caller-owned paths after submit() returns.
@@ -192,7 +183,7 @@ class FakeBackend:
             job, error = self._lookup(handle)
             if job is None:
                 results[handle] = OpOutcome[JobOutput](ok=False, reason=error)
-            elif job.status in _ACTIVE:
+            elif job.status in ACTIVE:
                 results[handle] = OpOutcome[JobOutput](
                     ok=False, reason="job has not finished"
                 )
@@ -209,7 +200,7 @@ class FakeBackend:
             job, error = self._lookup(handle)
             if job is None:
                 results[handle] = OpOutcome[None](ok=False, reason=error)
-            elif job.status in _ACTIVE:
+            elif job.status in ACTIVE:
                 job.status = JobStatus.ABORTED
                 results[handle] = OpOutcome[None](ok=True)
             else:
@@ -281,7 +272,7 @@ class FakeBackend:
 
     def _check_can_fetch(self, inputs: Sequence[FileRef]) -> None:
         for ref in inputs:
-            if _is_url(ref.source):
+            if is_url(ref.source):
                 raise SpecificationRejectedError(
                     f"{self.resource} cannot fetch inputs from URLs"
                 )
@@ -311,13 +302,8 @@ class FakeBackend:
     def _read_local_inputs(inputs: Sequence[FileRef]) -> dict[str, bytes]:
         contents: dict[str, bytes] = {}
         for ref in inputs:
-            if not _is_url(ref.source):
-                try:
-                    contents[ref.name] = Path(ref.source).read_bytes()
-                except OSError as exc:
-                    raise SpecificationRejectedError(
-                        f"input {ref.name!r}: cannot read {ref.source}: {exc.strerror}"
-                    ) from exc
+            if not is_url(ref.source):
+                contents[ref.name] = read_input(ref)
         return contents
 
     @staticmethod

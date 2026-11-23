@@ -26,6 +26,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from typing import Annotated, Any, Literal, Self
+from urllib.parse import urlsplit
 
 from pydantic import (
     BaseModel,
@@ -105,6 +106,17 @@ class ARCConfig(_QueueConfig):
 
     endpoint: str
     """The CE's REST endpoint, e.g. ``"https://arc.example.org:443/arex"``."""
+
+    @model_validator(mode="after")
+    def _endpoint_is_https(self) -> Self:
+        # A-REX serves its REST interface over HTTPS only, and a token goes with
+        # every request.
+        url = urlsplit(self.endpoint)
+        if url.scheme != "https" or not url.hostname:
+            raise ValueError(
+                "endpoint must be an https:// URL, e.g. 'https://arc.example.org:443/arex'"
+            )
+        return self
 
 
 class HTCondorCEConfig(_QueueConfig):

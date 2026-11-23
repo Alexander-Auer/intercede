@@ -60,6 +60,40 @@ def required_markers(expression: str) -> set[str]:
     }
 
 
+@pytest.fixture(autouse=True)
+def _backend_provided(request: pytest.FixtureRequest) -> None:
+    """Skip the shared suite on a stack whose backend this version does not provide yet.
+
+    A stack can land before its backend, in a pull request of its own: its own
+    tests run, and the shared suite runs once the registry has the backend.
+    """
+    if request.node.get_closest_marker("contract") is None:
+        return
+    kind = request.getfixturevalue("client_config")["backend"]["kind"]
+    if kind not in registry.available()["backend"]:
+        pytest.skip(f"interCEde provides no {kind!r} backend yet")
+
+
+@pytest.fixture(autouse=True)
+def _trust_the_stack(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Trust the CA a TLS stack made at start, as a grid host trusts its CAs.
+
+    A stack that serves TLS writes its CA, in the ``X509_CERT_DIR`` layout, to
+    ``certificates/`` in its credentials folder; a backend finds it there
+    through ``X509_CERT_DIR``.
+    """
+    if "client_config" not in request.fixturenames:
+        return
+    config = request.getfixturevalue("client_config")
+    if "credentials" not in config:
+        return
+    folder = request.getfixturevalue("stack_dir") / config["credentials"]["path"]
+    if (folder / "certificates").is_dir():
+        monkeypatch.setenv("X509_CERT_DIR", str(folder / "certificates"))
+
+
 @pytest.fixture(scope="session")
 def stack(request: pytest.FixtureRequest) -> dict[str, Any]:
     """Return the stacks.yml entry selected by --stack; skip the test when none is given."""

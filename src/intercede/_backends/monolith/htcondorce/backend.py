@@ -15,7 +15,14 @@ from typing import Any, Self
 
 from intercede._backends._htcondor import status
 from intercede._backends._htcondor.submit import SubmitPlan, render
-from intercede._backends.credentials import credential_requirements, refresh_if_stale
+from intercede._backends.common import ACTIVE, copies_of
+from intercede._backends.credentials import (
+    CANCEL_SCOPES,
+    READ_SCOPES,
+    SUBMIT_SCOPES,
+    CredentialCache,
+    credential_requirements,
+)
 from intercede._backends.monolith.htcondorce import collect, staging
 from intercede._backends.monolith.htcondorce.process import Runner, run_process
 from intercede._backends.monolith.htcondorce.session import (
@@ -44,13 +51,6 @@ BACKEND = "htcondor-ce"
 DEFAULT_PORT = 9619
 PARALLEL_TRANSFERS = 4
 
-# Token scopes per operation (WLCG token profile), so a status poller carries
-# a read scope and nothing that would let it submit.
-SUBMIT_SCOPES = frozenset({"compute.create"})
-READ_SCOPES = frozenset({"compute.read"})
-CANCEL_SCOPES = frozenset({"compute.cancel"})
-
-_ACTIVE = frozenset({JobStatus.SUBMITTED, JobStatus.WAITING, JobStatus.RUNNING})
 _JOB_ID = re.compile(r"^\d+\.\d+$")
 # Attributes get_output() needs on top of the state.
 _OUTPUT_ATTRIBUTES = (*status.STATE_ATTRIBUTES, "Out", "Err", "UserLog", "SUBMIT_Iwd")
@@ -72,14 +72,13 @@ class HTCondorCEBackend:
     ) -> None:
         # Construction is cheap and does no I/O.
         self._settings = settings
-        self._provider = credentials
+        self._credentials = CredentialCache(credentials)  # a token per scope set
         self._run = runner
         self._workdir = workdir or staging.default_workdir()
         self._host, port = split_endpoint(settings.endpoint)
         self._pool = f"{self._host}:{port}"
         # The CE's schedd is named after its host unless the site says otherwise.
         self._name = settings.schedd or self._host
-        self._tokens: dict[frozenset[str], BearerToken] = {}  # per scope set
         # Only jobs being collected right now: a lock disappears with its last
         # user, so the backend keeps no record of the jobs it has seen.
         self._collecting: weakref.WeakValueDictionary[JobID, asyncio.Lock] = (
@@ -122,7 +121,7 @@ class HTCondorCEBackend:
     ) -> None:
         # Idempotent. Cached tokens are dropped; they were never written anywhere.
         self._closed = True
-        self._tokens.clear()
+        self._credentials.clear()
 
     # -- Submitter ---------------------------------------------------------
 
@@ -130,15 +129,9 @@ class HTCondorCEBackend:
         self, spec: SubmissionSpec, copies: int | Sequence[CopyVars] = 1
     ) -> Submission:
         self._check_usable()
-        copy_vars = [CopyVars()] * copies if isinstance(copies, int) else list(copies)
+        copy_vars = copies_of(spec, copies)
         if not copy_vars:
             return Submission(handles={})
-        for index, copy in enumerate(copy_vars):
-            # A secret and an input would be staged to the same file.
-            if clashes := spec.clashes_with(copy):
-                raise SpecificationRejectedError(
-                    f"copy {index}: secrets {sorted(clashes)} are named like inputs"
-                )
         outputs, remaps = staging.outputs(spec)
         executable, ship, arguments = staging.command(
             spec, self._settings.container_launcher, self.resource
@@ -151,6 +144,9 @@ class HTCondorCEBackend:
             submission.mkdir(mode=0o700)
             try:
                 inputs = staging.stage_inputs(spec, submission)
+                # Every description is written before the first is submitted:
+                # a value one cannot hold refuses the whole submission.
+                descriptions: list[tuple[list[int], Path]] = []
                 for group in staging.group_by_environment(spec, copy_vars):
                     plan = SubmitPlan(
                         executable=executable,
@@ -171,7 +167,12 @@ class HTCondorCEBackend:
                         queue=spec.resources.queue or self._settings.queue,
                     )
                     description = submission / f"group-{group[0]}.sub"
-                    description.write_text(render(plan))
+                    try:
+                        description.write_text(render(plan))
+                    except ValueError as exc:
+                        raise SpecificationRejectedError(str(exc)) from exc
+                    descriptions.append((group, description))
+                for group, description in descriptions:
                     try:
                         ids = await session.submit(description, len(group))
                     except InterCEdeError as exc:
@@ -229,7 +230,7 @@ class HTCondorCEBackend:
                     else "unknown job"
                 )
                 results[handle] = OpOutcome[JobOutput](ok=False, reason=reason)
-            elif status.job_status(ad) in _ACTIVE:
+            elif status.job_status(ad) in ACTIVE:
                 results[handle] = OpOutcome[JobOutput](
                     ok=False, reason="job has not finished"
                 )
@@ -290,7 +291,7 @@ class HTCondorCEBackend:
         ads = await self._ads(ids, status.STATE_ATTRIBUTES, history=True)
         # Only active jobs are removed: removing a finished job would release
         # output that has not been collected yet. That is purge()'s job.
-        active = [i for i in ids if i in ads and status.job_status(ads[i]) in _ACTIVE]
+        active = [i for i in ids if i in ads and status.job_status(ads[i]) in ACTIVE]
         removed, reason = await self._remove(active)
         return {
             handle: self._outcome(
@@ -351,12 +352,9 @@ class HTCondorCEBackend:
     async def _fresh(self, scopes: frozenset[str]) -> BearerToken:
         requirements = credential_requirements(self._settings, scopes)
         assert requirements is not None  # an HTCondor-CE always asks for a token
-        fresh = await refresh_if_stale(
-            self._tokens.get(scopes), requirements, self._provider
-        )
-        assert isinstance(fresh, BearerToken)  # refresh_if_stale checked the kind
-        self._tokens[scopes] = fresh
-        return fresh
+        token = await self._credentials.fresh(requirements)
+        assert isinstance(token, BearerToken)  # the cache checked the kind
+        return token
 
     async def _ads(
         self, ids: Sequence[JobID], attributes: Sequence[str], *, history: bool

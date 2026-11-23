@@ -15,6 +15,12 @@ from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 
 from intercede._backends._htcondor.submit import CopyPlan
+from intercede._backends.common import (
+    check_container,
+    container_command,
+    is_url,
+    read_input,
+)
 from intercede.exceptions import ConfigurationError, SpecificationRejectedError
 from intercede.models import CopyVars, SubmissionSpec
 
@@ -62,7 +68,7 @@ def stage_inputs(spec: SubmissionSpec, submission: Path) -> list[str]:
     staged: list[str] = []
     common = submission / "inputs"
     for ref in spec.inputs:
-        if "://" in ref.source:
+        if is_url(ref.source):
             if PurePosixPath(ref.source.split("?")[0]).name != ref.name:
                 raise SpecificationRejectedError(
                     f"input {ref.name!r}: HTCondor names a URL input after the URL, "
@@ -72,14 +78,7 @@ def stage_inputs(spec: SubmissionSpec, submission: Path) -> list[str]:
             continue
         target = common / ref.name
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        # Read now: the caller may delete its file once submit() returns.
-        try:
-            content = Path(ref.source).read_bytes()
-        except OSError as exc:
-            raise SpecificationRejectedError(
-                f"input {ref.name!r}: cannot read {ref.source}: {exc.strerror}"
-            ) from exc
-        target.write_bytes(content)
+        target.write_bytes(read_input(ref))
     if common.exists():
         # Trailing slash: the directory's contents, keeping sub-directories.
         staged.append(f"{common}/")
@@ -132,27 +131,13 @@ def command(
     A file on this host is shipped; anything else is a command on the worker.
     A container image is run through the configured launcher.
     """
-    executable = spec.executable
-    arguments = list(spec.arguments)
-    is_local_file = Path(spec.executable).is_file()
+    check_container(spec, launcher, resource)
 
-    if spec.container is None:
-        return executable, is_local_file, arguments
+    if spec.container is None or launcher is None:
+        return spec.executable, Path(spec.executable).is_file(), list(spec.arguments)
 
-    if launcher is None:
-        raise SpecificationRejectedError(
-            f"{resource} has no container_launcher configured, so it cannot run "
-            f"{spec.container.image!r}"
-        )
-
-    if is_local_file:
-        raise SpecificationRejectedError(
-            "a container job runs a command inside the image, not a local file"
-        )
-
-    launcher_args = [arg.replace("{image}", spec.container.image) for arg in launcher]
-
-    return (launcher_args[0], False, [*launcher_args[1:], executable, *arguments])
+    argv = container_command(spec, launcher)
+    return argv[0], False, argv[1:]
 
 
 def outputs(spec: SubmissionSpec) -> tuple[list[str] | None, dict[str, str]]:

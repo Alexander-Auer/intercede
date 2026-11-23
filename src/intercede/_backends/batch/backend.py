@@ -32,6 +32,7 @@ from intercede._backends.batch.protocols import (
     SchedulerStatusMap,
     Transport,
 )
+from intercede._backends.common import ACTIVE, copies_of
 from intercede.config import BatchLocalConfig, BatchSSHConfig
 from intercede.exceptions import (
     ConfigurationError,
@@ -57,7 +58,6 @@ COMMAND_TIMEOUT_S = 120  # every command but copying files, which uses the limit
 CHUNK = 100  # job IDs per command line, so a poll of thousands of jobs stays bounded
 PARALLEL_TRANSFERS = 4
 
-_ACTIVE = frozenset({JobStatus.SUBMITTED, JobStatus.WAITING, JobStatus.RUNNING})
 _SUBMISSION = re.compile(r"[0-9a-f]{32}")
 _COPY = re.compile(r"[0-9]+")
 
@@ -130,7 +130,7 @@ class BatchBackend:
         self, spec: SubmissionSpec, copies: int | Sequence[CopyVars] = 1
     ) -> Submission:
         self._check_usable()
-        copy_vars = [CopyVars()] * copies if isinstance(copies, int) else list(copies)
+        copy_vars = copies_of(spec, copies)
         if not copy_vars:
             return Submission(handles={})
         launcher = self._settings.container_launcher
@@ -205,7 +205,7 @@ class BatchBackend:
             state = states.get(handle.id) if self._owns(handle) else None
             if state is None:
                 results[handle] = _not_collected("unknown job")
-            elif state in _ACTIVE:
+            elif state in ACTIVE:
                 results[handle] = _not_collected("job has not finished")
             else:
                 ready[handle] = None
@@ -290,7 +290,7 @@ class BatchBackend:
         ids = self._ids(handles)
         states = await self._states(ids)
         # Only active jobs: a finished one has nothing left to cancel.
-        refused = await self._cancel([i for i in ids if states.get(i) in _ACTIVE])
+        refused = await self._cancel([i for i in ids if states.get(i) in ACTIVE])
         results = {}
         for handle in handles:
             state = states.get(handle.id) if self._owns(handle) else None
@@ -298,7 +298,7 @@ class BatchBackend:
                 results[handle] = OpOutcome[None](ok=False, reason="unknown job")
             elif handle.id in refused:
                 results[handle] = OpOutcome[None](ok=False, reason=refused[handle.id])
-            elif state in _ACTIVE:
+            elif state in ACTIVE:
                 results[handle] = OpOutcome[None](ok=True)
             else:
                 results[handle] = OpOutcome[None](ok=True, reason="already finished")
@@ -310,7 +310,7 @@ class BatchBackend:
         self._check_usable()
         ids = self._ids(handles)
         states = await self._states(ids)
-        refused = await self._cancel([i for i in ids if states.get(i) in _ACTIVE])
+        refused = await self._cancel([i for i in ids if states.get(i) in ACTIVE])
         ours = [h for h in handles if self._owns(h) and h.id not in refused]
         failed = await self._remove(ours)
         results = {}
@@ -336,7 +336,7 @@ class BatchBackend:
         # A tool does not say which ID failed, so see what really happened: a
         # job may also have ended in the meantime.
         states = await self._states(list(failures))
-        return {i: why for i, why in failures.items() if states.get(i) in _ACTIVE}
+        return {i: why for i, why in failures.items() if states.get(i) in ACTIVE}
 
     async def _remove(self, handles: Sequence[JobHandle]) -> dict[JobHandle, str]:
         """Remove jobs' files; return the reason for each whose files could not be."""

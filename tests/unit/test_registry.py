@@ -127,16 +127,9 @@ class TestRefused:
         with pytest.raises(ConfigurationError, match="must be a CredentialProvider"):
             registry.get_backend(LOCAL_SLURM, credentials)
 
-    @pytest.mark.parametrize(
-        "config",
-        [{"kind": "arc", "endpoint": "https://arc.example.org:443"}, CLOUD],
-        ids=["arc", "cloud"],
-    )
-    def test_valid_but_not_shipped_yet(self, config: dict[str, Any]):
-        with pytest.raises(
-            RegistryError, match=f"backend '{config['kind']}' is not available"
-        ):
-            registry.get_backend(config, CREDENTIALS)
+    def test_valid_but_not_shipped_yet(self):
+        with pytest.raises(RegistryError, match="backend 'cloud' is not available"):
+            registry.get_backend(CLOUD, CREDENTIALS)
 
     def test_composed_part_not_shipped_yet(self):
         config = {**SSH_SLURM, "scheduler": "htcondor"}
@@ -179,7 +172,7 @@ class TestRefused:
 class TestAvailable:
     def test_shipped_today(self):
         assert registry.available() == {
-            "backend": ("batch", "htcondor-ce"),
+            "backend": ("arc", "batch", "htcondor-ce"),
             "transport": ("local", "ssh"),
             "scheduler": ("slurm",),
         }
