@@ -62,6 +62,22 @@ The mapping follows DIRAC's `AREXComputingElement`, with two differences:
 | `HELD` | Running, meant to be killed | Waiting | The batch system holds the job and can release it; the same job through the Slurm backend is waiting. Killing it is the consumer's policy. |
 | `WIPED` | Aborted | Unknown | ARC removed the job's files, and with them how the job ended. |
 
+## Killing and purging
+
+A-REX answers `202 Queued for killing` to a kill of any job it knows, also one that has already
+ended, and then does nothing with it. So `kill` asks for the states first, cancels only the jobs
+that are still active, and reports the others as finished.
+
+ARC's `clean` removes a job and its files, after which A-REX no longer knows it: a status is then
+404, and `get_status` reports Unknown. A clean of a job that is still active is accepted, but A-REX
+keeps it until the job has ended. So `purge` cancels an active job and cleans it in the same call,
+and the job is released once it has stopped (about a minute on the arc-slurm stack). A job that
+could not be cancelled is not cleaned, so it keeps its files.
+
+Since A-REX forgets a cleaned job entirely, a second purge cannot tell it from a job it never had.
+Both have nothing left to release, so `purge` reports them as a success, and purging twice is
+harmless as on the other backends. `kill` reports such a job as unknown.
+
 ## Tokens and connections
 
 Every request carries a bearer token with the scopes of its operation, as the WLCG token profile
