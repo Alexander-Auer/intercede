@@ -13,7 +13,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Self
 
-from intercede._backends.batch.protocols import Command, CommandResult
+from intercede._backends.batch.protocols import Command, CommandResult, Transport
 from intercede.auth.protocols import CredentialProvider
 from intercede.config import BatchLocalConfig
 from intercede.exceptions import ResourceUnavailableError
@@ -125,3 +125,7 @@ def copy(source: Path, destination: Path) -> None:
         # Not copy2: given an existing directory, it would copy into it.
         shutil.copyfile(source, destination)
         shutil.copymode(source, destination)
+
+
+# The type checker proves conformance.
+_transport: type[Transport] = LocalTransport
