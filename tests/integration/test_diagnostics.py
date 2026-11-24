@@ -51,7 +51,9 @@ async def test_a_running_job_can_be_read(
 
         assert stdout.content == "started\n"
         assert (log.filename, log.content) == ("job.log", "step-1\n")
-        # Reading changes nothing: the job runs on.
+        # Reading is repeatable, and changes nothing: the job runs on.
+        again = (await diagnosable.get_diagnostics(handles))[handles[0]]
+        assert again.value == stdout
         assert (await backend.get_status(handles))[handles[0]] == JobStatus.RUNNING
     finally:
         await release(backend, handles)
