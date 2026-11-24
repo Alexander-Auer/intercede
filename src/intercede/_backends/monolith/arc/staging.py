@@ -10,11 +10,15 @@ any job exists.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
 from pathlib import Path
 
-from intercede._backends._arc.description import InputFile, JobPlan, OutputFile
+from intercede._backends._arc.description import (
+    InputFile,
+    JobPlan,
+    OutputFile,
+    is_glob,
+)
 from intercede._backends.common import (
     check_container,
     container_command,
@@ -30,8 +34,6 @@ EXECUTABLE = ".intercede-executable"
 STDOUT = ".intercede-stdout"
 STDERR = ".intercede-stderr"
 _RESERVED = frozenset({EXECUTABLE, STDOUT, STDERR})
-
-_GLOB = re.compile(r"[*?\[]")
 
 
 def check(
@@ -52,19 +54,9 @@ def check(
         SpecificationRejectedError: ``spec`` or a copy cannot be honoured.
     """
     check_container(spec, launcher, resource)
-    outputs = spec.outputs
-    if outputs is not None and outputs.include_unlisted:
-        raise SpecificationRejectedError(
-            f"{resource}: this backend does not collect outputs, "
-            "so it cannot keep unlisted ones"
-        )
-    for member in outputs.members if outputs else ():
-        if member.destination is None:
-            raise SpecificationRejectedError(
-                f"output {member.pattern!r}: this backend does not collect outputs, "
-                "so it needs a destination"
-            )
-        if _GLOB.search(member.pattern):
+    for member in spec.outputs.members if spec.outputs else ():
+        # One kept for collection is chosen by the backend, so it may be a pattern.
+        if member.destination is not None and is_glob(member.pattern):
             raise SpecificationRejectedError(
                 f"output {member.pattern!r}: ARC uploads an output by its name, "
                 "not by pattern"
@@ -142,6 +134,7 @@ def plans(
             environment={**spec.environment, **copy.environment},
             inputs=[*shared, *(InputFile(name) for name in copy.secrets)],
             outputs=outputs,
+            include_unlisted=spec.outputs is not None and spec.outputs.include_unlisted,
             stdout=spec.stdout or STDOUT,
             stderr=spec.stderr or STDERR,
             cpus=spec.resources.cpus,

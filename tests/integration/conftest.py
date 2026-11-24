@@ -3,7 +3,7 @@
 The tests marked ``contract`` are the shared suite: written once against the
 interCEde protocols, run on every stack. A test that needs an optional
 capability takes its fixture (``output_retriever``, ``killable``,
-``purgeable``) and is skipped on a backend that does not have it.
+``purgeable``, ``diagnosable``) and is skipped on a backend that does not have it.
 """
 
 from __future__ import annotations
@@ -24,7 +24,13 @@ from intercede._backends.batch.protocols import Transport
 from intercede.auth.models import BearerToken, Credential, SSHPrivateKey
 from intercede.auth.providers import StaticCredentials
 from intercede.config import validate_config
-from intercede.protocols import JobBackend, Killable, OutputRetriever, Purgeable
+from intercede.protocols import (
+    Diagnosable,
+    JobBackend,
+    Killable,
+    OutputRetriever,
+    Purgeable,
+)
 from tests.integration.generate_matrix import STACKS_DIR, compose_env, load_manifest
 
 # Nothing listens on port 1, so connecting is refused at once.
@@ -317,3 +323,9 @@ def killable(backend: JobBackend) -> Killable:
 def purgeable(backend: JobBackend) -> Purgeable:
     """Return the backend as Purgeable; skip the test when it is not."""
     return _capable(backend, Purgeable)
+
+
+@pytest.fixture
+def diagnosable(backend: JobBackend) -> Diagnosable:
+    """Return the backend as Diagnosable; skip the test when it is not."""
+    return _capable(backend, Diagnosable)

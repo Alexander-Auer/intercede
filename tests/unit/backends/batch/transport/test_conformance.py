@@ -74,6 +74,12 @@ def tree(root: Path) -> dict[str, bytes]:
     }
 
 
+# Prints each argument it was given, followed by a NUL. The shell's own printf
+# is used because a printf program need not treat every argument as data: the
+# uutils one on Ubuntu 26.04 drops a "--" that follows the format.
+READ_BACK = ("sh", "-c", 'printf "%s\\0" "$@"', "sh")
+
+
 class TestRun:
     async def test_returns_the_exit_code_and_what_was_printed(
         self, transport: Transport
@@ -91,10 +97,10 @@ class TestRun:
     async def test_an_argument_arrives_exactly(
         self, transport: Transport, argument: str
     ):
-        assert await run(transport, "printf", "%s\\0", argument) == f"{argument}\0"
+        assert await run(transport, *READ_BACK, argument) == f"{argument}\0"
 
     async def test_arguments_arrive_exactly_and_in_order(self, transport: Transport):
-        printed = await run(transport, "printf", "%s\\0", *AWKWARD.values())
+        printed = await run(transport, *READ_BACK, *AWKWARD.values())
         assert printed.split("\0")[:-1] == list(AWKWARD.values())
 
     async def test_the_program_may_have_an_awkward_path(

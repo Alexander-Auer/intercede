@@ -22,15 +22,15 @@ know which version caused the problem.
 Some backends do not support every feature. The tests check for a feature in the same way that
 users of the library do (`isinstance` against a `runtime_checkable` protocol), and skip the test
 when the backend does not have it. A test asks for a capability by taking its fixture
-(`output_retriever`, `killable`, `purgeable`).
+(`output_retriever`, `killable`, `purgeable`, `diagnosable`).
 
 ## Phases
 
 - **Phase 0.** Before the interCEde protocols existed, a stack was tested with the backend's own
   command-line tools (`arcsub`, `arcstat`, `arcget`, `condor_submit`, `sbatch`).
 - **Phase 2 (now).** One set of tests, written against the interCEde protocols, runs on every stack
-  (`test_submit.py`, `test_status.py`, `test_output.py`, `test_kill.py`, `test_purge.py`, and
-  `test_errors.py` for what a consumer sees when things go wrong). These tests carry the
+  (`test_submit.py`, `test_status.py`, `test_output.py`, `test_kill.py`, `test_purge.py`,
+  `test_diagnostics.py`, and `test_errors.py` for what a consumer sees when things go wrong). These tests carry the
   `contract` marker, which selects them whatever a stack's `markers` say. A new backend writes no
   tests of its own: its stack runs this suite. Behaviour that only one backend has (for example
   HTCondor's one-time output download) gets its own test and marker (`destructive_fetch`), not an

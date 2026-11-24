@@ -124,7 +124,7 @@ Defined in `tests/conftest.py` (options) and `tests/integration/conftest.py` (fi
 | `credential` | fixture | The credential `[credentials]` points to, read from the stack's credentials folder. |
 | `rejected_credentials` | fixture | A provider holding a credential of the right kind that the resource rejects. |
 | `unreachable_config` | fixture | `[backend]`, pointed at a closed port, as when the resource is down. |
-| `output_retriever`, `killable`, `purgeable` | fixture | The backend as that capability; skips the test when the backend does not have it. |
+| `output_retriever`, `killable`, `purgeable`, `diagnosable` | fixture | The backend as that capability; skips the test when the backend does not have it. |
 | `transport`, `remote`, `here` | fixture | A composed backend's transport on its own, an empty directory on the resource and one on this host; what `test_transport.py` runs on. |
 
 If `intercede-client.toml` is missing, the test fails in CI (when `$CI` is set) and is skipped
