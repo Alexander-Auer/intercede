@@ -15,8 +15,14 @@ on:
 permissions:
   contents: read
 
+# A new push to the same PR cancels the previous run.
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   matrix:
+    name: matrix
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.gen.outputs.matrix }}
@@ -54,16 +60,21 @@ jobs:
           # Workaround for https://github.com/prefix-dev/pixi/issues/3762
           sed -i.bak 's@editable = true@editable = false@g' pyproject.toml
           rm pyproject.toml.bak
-      - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94 # v0.11.2
+      - uses: prefix-dev/setup-pixi@9936258fee697aff89b3fed6ca1f80a382ef694e # v0.11.3
         if: matrix.exec_in_container == false
         with:
-          pixi-version: v0.83.0
+          pixi-version: v0.84.1
           cache: false
           environments: py313
 
       - name: Run the contract suite
+        env:
+          EXEC_IN_CONTAINER: ${{ matrix.exec_in_container }}
+          MARKERS: ${{ matrix.markers }}
+          STACK: ${{ matrix.stack }}
+          CONFIG: ${{ matrix.config }}
         run: |
-          if [ "${{ matrix.exec_in_container }}" = "true" ]; then
+          if [ "$EXEC_IN_CONTAINER" = "true" ]; then
             # Inside the container, as the normal user jobs run as (compose.yml mounts the suite).
             runner=(docker compose -f "$COMPOSE_FILE" exec -T -e CI --user dirac backend \
               /opt/suite/bin/pytest -n "${{ matrix.workers }}")
@@ -71,17 +82,10 @@ jobs:
             # Independent tests, run side by side (stacks.yml `workers`).
             runner=(pixi run -e py313 pytest -n "${{ matrix.workers }}")
           fi
-          set +e
-          # -rs --no-fold-skipped: name every skipped test and why.
-          "${runner[@]}" tests/integration -m "${{ matrix.markers }}" -rs --no-fold-skipped \
-            --stack="${{ matrix.stack }}" --config="${{ matrix.config }}"
-          rc=$?
-          # Exit 5 = no tests selected; tolerated until the contract suite lands.
-          if [ "$rc" -eq 5 ]; then
-            echo "::notice::stack '${{ matrix.stack }}': no tests matched markers '${{ matrix.markers }}' (pytest exit 5) - passing until the contract suite lands"
-            rc=0
-          fi
-          exit "$rc"
+          # -rs --no-fold-skipped: name every skipped test and why. Every stack
+          # runs the shared suite, so a run that selects no test fails (exit 5).
+          "${runner[@]}" tests/integration -m "$MARKERS" -rs --no-fold-skipped \
+            --stack="$STACK" --config="$CONFIG"
 
       - name: Collect daemon logs
         if: failure()
