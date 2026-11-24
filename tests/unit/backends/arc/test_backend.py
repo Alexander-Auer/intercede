@@ -3,7 +3,8 @@
 Normal behaviour is the shared integration suite's, on the arc-slurm stack.
 These tests drive the backend through its public operations, against a
 simulated A-REX, for what a stack does not produce: states it never reaches,
-refusals, partial failures, and answers a CE gives when something is wrong.
+refusals, partial failures, answers a CE gives when something is wrong, and
+the limits on what a job's files may make the backend do on this host.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from intercede import (
     SpecificationRejectedError,
 )
 from intercede._backends.monolith.arc import ARCBackend
+from intercede._backends.monolith.arc.backend import DIAGNOSTICS_BYTES
 
 from ._fake_arc import ENDPOINT, SPEC, FakeARC, ScopedTokens, make
 
@@ -127,10 +129,6 @@ def _input(tmp_path: Path, name: str) -> FileRef:
 
 # Each is refused before the CE is contacted, or a token asked for.
 REFUSED: dict[str, dict[str, Any]] = {
-    "output-for-collection": {
-        "outputs": OutputSpec(members=[OutputMember(pattern="result.txt")])
-    },
-    "unlisted-outputs": {"outputs": OutputSpec(include_unlisted=True)},
     "output-pattern-to-url": {
         "outputs": OutputSpec(
             members=[
@@ -307,3 +305,135 @@ class TestKillAndPurge:
         outcome = (await getattr(ce, operation)([theirs]))[theirs]
         assert not outcome.ok and outcome.reason == "unknown job"
         assert arc.requests == []
+
+
+async def finished(
+    ce: ARCBackend, arc: FakeARC, files: dict[str, bytes], **update: Any
+) -> JobHandle:
+    """Submit a job and let it finish, leaving ``files`` in its session directory."""
+    handle = (await ce.submit(SPEC.model_copy(update=update))).handles[0]
+    (job,) = arc.created()
+    job.state = "FINISHED"
+    job.files.update(files)
+    return handle
+
+
+def written(dest: Path) -> set[str]:
+    return {path.name for path in dest.rglob("*") if path.is_file()}
+
+
+class TestOutput:
+    async def test_only_what_the_specification_keeps_is_collected(
+        self, ce: ARCBackend, arc: FakeARC, tmp_path: Path
+    ):
+        # ARC keeps all of the directory for a pattern; the backend chooses.
+        outputs = OutputSpec(
+            members=[OutputMember(pattern="*.txt"), OutputMember(pattern="data")]
+        )
+        handle = await finished(
+            ce,
+            arc,
+            {
+                ".intercede-stdout": b"out",
+                "a.txt": b"a",
+                "data/deep/x.bin": b"x",
+                "other.log": b"not asked for",
+            },
+            outputs=outputs,
+            inputs=[_input(tmp_path, "in.txt")],  # staged, so never output
+        )
+        arc.created()[0].log = b"the CE's log"
+        outcome = (await ce.get_output([handle], tmp_path / "out"))[handle]
+        assert outcome.ok, outcome.reason
+        output = outcome.value
+        assert output is not None and output.stdout and output.log
+        assert sorted(output.files) == ["a.txt", "data/deep/x.bin"]
+        assert output.stdout.read_bytes() == b"out"
+        assert output.log.read_bytes() == b"the CE's log"
+        assert output.stderr is None  # the job wrote none
+
+    async def test_a_name_that_leaves_the_directory(
+        self, ce: ARCBackend, arc: FakeARC, tmp_path: Path
+    ):
+        handle = await finished(
+            ce,
+            arc,
+            {"../escape": b"x"},
+            outputs=OutputSpec(include_unlisted=True),
+        )
+        outcome = (await ce.get_output([handle], tmp_path / "out"))[handle]
+        assert not outcome.ok and "outside" in (outcome.reason or "")
+        assert written(tmp_path) == set()
+
+    async def test_more_bytes_than_allowed_arrive(self, arc: FakeARC, tmp_path: Path):
+        # A-REX lists no sizes: the bytes are counted as they arrive.
+        async with make(arc, max_output_bytes=10) as ce:
+            handle = await finished(
+                ce,
+                arc,
+                {".intercede-stdout": b"12345", "a.txt": b"678901"},
+                outputs=OutputSpec(members=[OutputMember(pattern="a.txt")]),
+            )
+            outcome = (await ce.get_output([handle], tmp_path / "out"))[handle]
+        assert outcome == OpOutcome(ok=False, reason="output larger than 10 bytes")
+        assert written(tmp_path) == set()  # no partial collection is left
+
+    async def test_more_files_than_allowed(self, arc: FakeARC, tmp_path: Path):
+        async with make(arc, max_output_files=2) as ce:
+            handle = await finished(
+                ce,
+                arc,
+                {"a": b"", "b": b"", ".intercede-stdout": b""},
+                outputs=OutputSpec(include_unlisted=True),
+            )
+            outcome = (await ce.get_output([handle], tmp_path / "out"))[handle]
+        assert outcome == OpOutcome(ok=False, reason="more than 2 output files")
+
+    async def test_a_job_whose_files_are_gone(
+        self, ce: ARCBackend, arc: FakeARC, tmp_path: Path
+    ):
+        # WIPED: the CE knows the job, and has removed its session directory.
+        handle = await finished(ce, arc, {})
+        arc.created()[0].state = "WIPED"
+        outcome = (await ce.get_output([handle], tmp_path / "out"))[handle]
+        assert not outcome.ok and "gone" in (outcome.reason or "")
+
+    async def test_each_job_gets_its_own_outcome(
+        self, ce: ARCBackend, arc: FakeARC, tmp_path: Path
+    ):
+        handle = (await ce.submit(SPEC)).handles[0]
+        outcomes = await ce.get_output([handle, HANDLE], tmp_path / "out")
+        assert outcomes[handle].reason == "job has not finished"
+        assert outcomes[HANDLE].reason == "unknown job"
+
+
+class TestDiagnostics:
+    @pytest.mark.parametrize("ignore_ranges", [False, True])
+    async def test_only_the_end_of_a_large_file_is_kept(
+        self, ce: ARCBackend, arc: FakeARC, ignore_ranges: bool
+    ):
+        arc.ignore_ranges = ignore_ranges
+        handle = (await ce.submit(SPEC)).handles[0]
+        (job,) = arc.created()
+        job.state = "RUNNING"
+        job.files[".intercede-stdout"] = b"x" * 10 + b"y" * DIAGNOSTICS_BYTES
+        outcome = (await ce.get_diagnostics([handle]))[handle]
+        assert outcome.ok and outcome.value is not None
+        assert outcome.value.content == "y" * DIAGNOSTICS_BYTES
+        assert outcome.value.filename == "stdout"
+
+    @pytest.mark.parametrize("name", ["../../info", "/etc/passwd", ""])
+    async def test_a_file_outside_the_directory_is_never_asked_for(
+        self, ce: ARCBackend, arc: FakeARC, name: str
+    ):
+        handle = (await ce.submit(SPEC)).handles[0]
+        arc.requests.clear()
+        outcome = (await ce.get_diagnostics([handle], name))[handle]
+        assert not outcome.ok and outcome.reason
+        assert arc.actions() == ["status"]
+
+    async def test_each_job_gets_its_own_outcome(self, ce: ARCBackend, arc: FakeARC):
+        handle = (await ce.submit(SPEC)).handles[0]
+        outcomes = await ce.get_diagnostics([handle, HANDLE], "job.log")
+        assert outcomes[handle].reason == "the job's directory has no file 'job.log'"
+        assert outcomes[HANDLE].reason == "unknown job"

@@ -62,6 +62,43 @@ The mapping follows DIRAC's `AREXComputingElement`, with two differences:
 | `HELD` | Running, meant to be killed | Waiting | The batch system holds the job and can release it; the same job through the Slurm backend is waiting. Killing it is the consumer's policy. |
 | `WIPED` | Aborted | Unknown | ARC removed the job's files, and with them how the job ended. |
 
+## Collecting output
+
+When a job ends, ARC removes every file of its session directory except those the description lists
+as outputs without a target. It reads each name literally: tested on ARC 7.2, an output named
+`*.txt` keeps nothing. An output named `/` keeps the whole directory. So the description lists an
+output kept for collection by its name. When the job keeps a pattern, or everything unlisted, the
+description lists `/` as well, and the backend chooses what to collect.
+
+The backend keeps no record of the jobs it submits. A-REX keeps each job's description as it was
+sent, and the job cannot change it, so `get_output` reads that description back. The description
+gives the names of stdout and stderr, the outputs and patterns the job keeps, and the files it was
+given. The patterns are listed by name too: ARC finds no such file, and the job is not harmed.
+When unlisted files are kept, every file except the inputs is collected, so a pattern adds nothing
+and is left out. So a description with `/` and no pattern keeps everything unlisted. The inputs,
+the executable and the secrets are never collected unless an output names them.
+
+What to collect is chosen from a listing of the session directory before any file is copied. A-REX
+lists neither sizes nor links. A link is never listed, so it is never collected. A name from a
+listing that is not a plain name, such as `..`, stops the collection. The file limit is checked
+against the listing. The byte limit is counted as each file arrives, and the timeout covers the
+whole job. Files are written to a new directory, which takes the place of the previous collection
+only when every file has arrived. The CE's own log of the job (`diagnose/errors`: how it went
+through A-REX and the batch system, and the batch script) is the output's `log`.
+
+Collecting does not change the job, so it can be repeated until the job is purged. A-REX keeps a
+finished job for its `lifetime` (a week by default), then removes its files and reports `WIPED`.
+
+## Reading a running job
+
+The session directory is the job's working directory, and A-REX serves it while the job runs.
+`get_diagnostics` reads one file from it, stdout by default, and returns the last MiB, where a
+running job writes. This needs the session directory to be shared with the worker nodes, which is
+ARC's default. A site that runs jobs in a local scratch directory (`scratchdir` in `arc.conf`) gets
+the files back only when the job ends, so until then a file is missing. A-REX ignores a range that counts from the end of a file, but
+serves one from an offset. So the backend asks for the size first, then for the part from the
+right offset. A CE that sends the whole file anyway still gives the right result.
+
 ## Killing and purging
 
 A-REX answers `202 Queued for killing` to a kill of any job it knows, also one that has already

@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import ssl
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -91,6 +92,83 @@ class Connection:
             headers={"Content-Type": "application/octet-stream"},
         )
 
+    async def read(self, path: str, scopes: frozenset[str]) -> bytes | None:
+        """Read a small document: a listing, or a file ARC keeps about a job.
+
+        Returns:
+            Its content, or None when the CE has nothing at ``path``.
+        """
+        response = await self._send("GET", path, scopes, missing_ok=True)
+        if response.status_code == httpx.codes.NOT_FOUND:
+            return None
+        content: bytes = response.content  # typed Any by httpx
+        return content
+
+    async def download(
+        self, path: str, file: Path, limit: int, scopes: frozenset[str]
+    ) -> int | None:
+        """Write the file at ``path`` into a new ``file``, as it arrives.
+
+        Args:
+            path: A file of a session directory, or one ARC keeps about a job.
+            file: Where to write it; must not exist.
+            limit: How many bytes may arrive; the size is counted, not trusted.
+            scopes: The token's.
+
+        Returns:
+            How many bytes were written, or None when the CE has no such file.
+
+        Raises:
+            ValueError: More than ``limit`` bytes arrived.
+        """
+        response = await self._send("GET", path, scopes, missing_ok=True, stream=True)
+        try:
+            if response.status_code == httpx.codes.NOT_FOUND:
+                return None
+            written = 0
+            with file.open("xb") as out:
+                async for chunk in response.aiter_bytes():
+                    written += len(chunk)
+                    if written > limit:
+                        raise ValueError(f"more than {limit} bytes")
+                    out.write(chunk)
+            return written
+        finally:
+            await response.aclose()
+
+    async def tail(self, path: str, limit: int, scopes: frozenset[str]) -> bytes | None:
+        """Read the last ``limit`` bytes of the file at ``path``, which may still grow.
+
+        A-REX serves a range from an offset, not the last bytes, so the size is
+        asked first. The range is only a saving: a CE that sends all of the file
+        is read to its end, keeping no more than ``limit`` bytes.
+
+        Returns:
+            Its end, or None when the CE has no such file.
+        """
+        head = await self._send("HEAD", path, scopes, missing_ok=True)
+        if head.status_code == httpx.codes.NOT_FOUND:
+            return None
+        try:
+            size = int(head.headers.get("Content-Length", "0"))
+        except ValueError:
+            size = 0
+        start = max(0, size - limit)
+        headers = {"Range": f"bytes={start}-"} if start else {}
+        response = await self._send(
+            "GET", path, scopes, missing_ok=True, stream=True, headers=headers
+        )
+        try:
+            if response.status_code == httpx.codes.NOT_FOUND:
+                return None
+            data = bytearray()
+            async for chunk in response.aiter_bytes():
+                data += chunk
+                del data[:-limit]  # whatever arrived beyond the last limit bytes
+            return bytes(data)
+        finally:
+            await response.aclose()
+
     async def close(self) -> None:
         """Close the connections; the next request opens new ones. Idempotent."""
         client, self._client = self._client, None
@@ -98,19 +176,42 @@ class Connection:
             await client.aclose()
 
     async def _send(
-        self, method: str, path: str, scopes: frozenset[str], **kwargs: Any
+        self,
+        method: str,
+        path: str,
+        scopes: frozenset[str],
+        *,
+        missing_ok: bool = False,
+        stream: bool = False,
+        **kwargs: Any,
     ) -> httpx.Response:
+        """Make a request; a streamed answer is the caller's to close.
+
+        Args:
+            method: The HTTP method.
+            path: Relative to the interface.
+            scopes: The token's.
+            missing_ok: Return a 404 answer instead of raising.
+            stream: Leave the body to be read by the caller.
+            **kwargs: Passed on to httpx: content, json, headers.
+
+        Returns:
+            The answer: a success, or a 404 when ``missing_ok``.
+        """
         token = await self._token(scopes)
         headers = {**kwargs.pop("headers", {}), "Authorization": f"Bearer {token}"}
+        client = self._open()
+        request = client.build_request(method, path, headers=headers, **kwargs)
         try:
-            response = await self._open().request(
-                method, path, headers=headers, **kwargs
-            )
+            response = await client.send(request, stream=stream)
         except httpx.TransportError as exc:  # also a timeout, or a TLS failure
             raise ResourceUnavailableError(
                 f"cannot reach {self._settings.endpoint}: {exc}"
             ) from exc
+        if missing_ok and response.status_code == httpx.codes.NOT_FOUND:
+            return response
         if _refused(response):
+            await response.aclose()
             # The connection would refuse every later request as well.
             await self.close()
             raise AuthenticationError(
@@ -118,6 +219,7 @@ class Connection:
                 f"({response.status_code} {response.reason_phrase})"
             )
         if response.is_error:
+            await response.aclose()
             raise ResourceUnavailableError(
                 f"{self._settings.endpoint} answered {response.status_code} "
                 f"{response.reason_phrase} to {method} {path.partition('?')[0]}"

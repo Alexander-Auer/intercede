@@ -4,7 +4,9 @@
 one entry per job with its own status code, 404 for a job it does not know,
 and HTTP 500 "User can't be assigned configuration" for a token it refuses.
 A kill of a job that has ended is accepted and does nothing; a clean of a job
-that is still active waits until it has ended.
+that is still active waits until it has ended. It serves a job's session
+directory as A-REX does: listings without links or sizes, files with HEAD and
+ranges from an offset, and the description it was sent.
 It runs behind httpx's ``MockTransport``, so no network is involved.
 """
 
@@ -59,7 +61,8 @@ class FakeJob:
     id: str
     description: ElementTree.Element
     state: str = "ACCEPTING"
-    files: dict[str, bytes] = field(default_factory=dict)
+    files: dict[str, bytes] = field(default_factory=dict)  # its session directory
+    log: bytes | None = None  # the CE's "errors" file of the job
     clean_when_ended: bool = False
 
     def texts(self, tag: str) -> list[str]:
@@ -96,6 +99,7 @@ class FakeARC(httpx.MockTransport):
         self.refused_copies: set[int] = set()  # descriptions the CE refuses
         self.failing_uploads: set[str] = set()  # names whose upload fails
         self.refused_kills: set[str] = set()  # jobs the CE will not kill
+        self.ignore_ranges = False  # send all of a file whatever range is asked
         self.answer: httpx.Response | None = None  # forced answer to everything
         self.closed = 0
 
@@ -130,6 +134,8 @@ class FakeARC(httpx.MockTransport):
         if request.method == "POST" and path == "jobs":
             ids = [job["id"] for job in json.loads(request.content)["job"]]
             return self._about(action or "", ids)
+        if request.method in ("GET", "HEAD") and path.startswith("jobs/"):
+            return self._read(request, path.removeprefix("jobs/"))
         if request.method == "PUT" and path.startswith("jobs/"):
             job_id, _, name = path.removeprefix("jobs/").partition("/session/")
             if job_id not in self.jobs:
@@ -139,6 +145,40 @@ class FakeARC(httpx.MockTransport):
             self.jobs[job_id].files[name] = request.content
             return _response(200, "OK")
         return _response(501, "Not Implemented")
+
+    def _read(self, request: httpx.Request, path: str) -> httpx.Response:
+        job_id, _, rest = path.partition("/")
+        job = self.jobs.get(job_id)
+        kind, _, name = rest.partition("/")
+        if job is None:
+            return _response(404, "Job not found")
+        if kind == "diagnose" and name == "description":
+            return httpx.Response(200, content=ElementTree.tostring(job.description))
+        if kind == "diagnose" and name == "errors" and job.log is not None:
+            return httpx.Response(200, content=job.log)
+        if kind != "session" or job.state == "WIPED":  # wiped: its files are gone
+            return _response(404, "Not found")
+        if name in job.files:
+            content = job.files[name]
+            size = {"Content-Length": str(len(content))}
+            if request.method == "HEAD":
+                return httpx.Response(200, headers=size)
+            start = request.headers.get("Range", "").removeprefix("bytes=")
+            if start.endswith("-") and not self.ignore_ranges:
+                return httpx.Response(206, content=content[int(start[:-1]) :])
+            return httpx.Response(200, content=content)
+        return self._listing(job, name)
+
+    def _listing(self, job: FakeJob, name: str) -> httpx.Response:
+        prefix = f"{name.rstrip('/')}/" if name else ""
+        files, dirs = set(), set()
+        for path in job.files:
+            if path.startswith(prefix):
+                head, sep, _ = path.removeprefix(prefix).partition("/")
+                (dirs if sep else files).add(head)
+        if prefix and not files | dirs:
+            return _response(404, "Not found")
+        return httpx.Response(200, json={"file": sorted(files), "dir": sorted(dirs)})
 
     def _new(self, body: bytes) -> httpx.Response:
         root = ElementTree.fromstring(body)  # noqa: S314  (the backend's own XML)

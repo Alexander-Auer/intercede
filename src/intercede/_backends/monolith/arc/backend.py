@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
+import tempfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from pathlib import Path
 from types import TracebackType
 from typing import Self
+from urllib.parse import quote
 
 import httpx
 
 from intercede._backends._arc import rest, status
-from intercede._backends._arc.description import render
+from intercede._backends._arc.description import read_kept, render
 from intercede._backends.common import ACTIVE, copies_of
 from intercede._backends.credentials import (
     CANCEL_SCOPES,
@@ -18,7 +22,7 @@ from intercede._backends.credentials import (
     SUBMIT_SCOPES,
     CredentialCache,
 )
-from intercede._backends.monolith.arc import staging
+from intercede._backends.monolith.arc import collect, staging
 from intercede._backends.monolith.arc.connection import Connection
 from intercede.auth.protocols import CredentialProvider
 from intercede.config import ARCConfig
@@ -29,18 +33,28 @@ from intercede.exceptions import (
 )
 from intercede.models import (
     CopyVars,
+    Diagnostics,
     JobHandle,
     JobID,
+    JobOutput,
     JobStatus,
     OpOutcome,
     StatusMap,
     Submission,
     SubmissionSpec,
 )
-from intercede.protocols import JobBackend, Killable, Purgeable
+from intercede.protocols import (
+    Diagnosable,
+    JobBackend,
+    Killable,
+    OutputRetriever,
+    Purgeable,
+)
 
 BACKEND = "arc"
 PARALLEL_TRANSFERS = 4
+# How much of a file get_diagnostics() reads: its end, where a running job writes.
+DIAGNOSTICS_BYTES = 2**20
 
 # Creating a job and uploading its files are two actions to ARC: with the WLCG
 # token profile, writing to a session directory needs "compute.modify".
@@ -48,10 +62,7 @@ _CREATE_SCOPES = SUBMIT_SCOPES | {"compute.modify"}
 
 
 class ARCBackend:
-    """An ARC CE: submit, status, kill and purge.
-
-    It has no live diagnostics (issue #22); ``Diagnosable`` is absent on purpose.
-    """
+    """An ARC CE: submit, status, output, kill, purge and live diagnostics."""
 
     def __init__(
         self,
@@ -216,6 +227,184 @@ class ARCBackend:
             for handle in handles
         }
 
+    # -- OutputRetriever ---------------------------------------------------
+
+    async def get_output(
+        self, handles: Sequence[JobHandle], dest: Path
+    ) -> Mapping[JobHandle, OpOutcome[JobOutput]]:
+        self._check_usable()
+        states = await self._states(self._ids(handles))
+        results: dict[JobHandle, OpOutcome[JobOutput]] = {}
+        ready: dict[str, list[JobHandle]] = {}  # each job once
+        for handle in handles:
+            state = states.get(handle.id) if self._owns(handle) else None
+            if state is None:
+                results[handle] = _not_collected("unknown job")
+            elif state in ACTIVE:
+                results[handle] = _not_collected("job has not finished")
+            else:
+                ready.setdefault(handle.id, []).append(handle)
+
+        limit = asyncio.Semaphore(PARALLEL_TRANSFERS)
+
+        async def fetch(job_id: str, same: list[JobHandle]) -> None:
+            async with limit:
+                outcome = await self._collect(job_id, dest)
+            results.update(dict.fromkeys(same, outcome))
+
+        await asyncio.gather(*(fetch(job_id, same) for job_id, same in ready.items()))
+        return {handle: results[handle] for handle in handles}  # in the caller's order
+
+    async def _collect(self, job_id: str, dest: Path) -> OpOutcome[JobOutput]:
+        """Copy what a finished job's specification keeps into ``dest``."""
+        target = dest / quote(self.resource, safe="") / job_id
+        timeout = self._settings.transfer_timeout_s
+        try:
+            async with asyncio.timeout(timeout):
+                description = await self._connection.read(
+                    rest.diagnose_path(job_id, "description"), READ_SCOPES
+                )
+                names = await self._walk(job_id)
+                if description is None or names is None:
+                    return _not_collected("the job was purged; its output is gone")
+                selection = collect.select(
+                    names,
+                    read_kept(description.decode(errors="replace")),
+                    max_files=self._settings.max_output_files,
+                )
+                target.parent.mkdir(parents=True, exist_ok=True)
+                return await self._copy(job_id, selection, target)
+        except TimeoutError:
+            return _not_collected(f"collecting took longer than {timeout} s")
+        except (ValueError, OSError, ResourceUnavailableError) as exc:
+            return _not_collected(str(exc))
+
+    async def _walk(self, job_id: str) -> list[str] | None:
+        """List every file of a job's session directory, or None when it is gone."""
+        names: list[str] = []
+        directories = [""]
+        while directories:
+            directory = directories.pop()
+            raw = await self._connection.read(
+                rest.session_path(job_id, directory), READ_SCOPES
+            )
+            if raw is None:
+                if not directory:
+                    return None
+                continue  # removed while it was being listed
+            try:
+                listing = rest.parse_listing(raw.decode())
+            except (UnicodeDecodeError, ValueError):
+                raise ValueError("the CE sent a listing that is not ARC's") from None
+            names += (collect.child(directory, name) for name in listing.files)
+            directories += (
+                collect.child(directory, name) + "/" for name in listing.dirs
+            )
+        return names
+
+    async def _copy(
+        self, job_id: str, selection: collect.Selection, target: Path
+    ) -> OpOutcome[JobOutput]:
+        """Copy into a new directory and put it in place only when all of it arrived."""
+        partial = Path(tempfile.mkdtemp(prefix=".partial-", dir=target.parent))
+        allowed = self._settings.max_output_bytes
+        left = allowed
+
+        async def fetch(path: str, local: Path) -> Path | None:
+            nonlocal left
+            local.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                written = await self._connection.download(
+                    path, local, left, READ_SCOPES
+                )
+            except ValueError:
+                raise ValueError(f"output larger than {allowed} bytes") from None
+            if written is None:
+                return None
+            left -= written
+            return target / local.relative_to(partial)
+
+        async def member(name: str, local: Path) -> Path:
+            path = await fetch(rest.session_path(job_id, name), local)
+            if path is None:
+                raise ValueError(f"{name} left the job's directory while it was copied")
+            return path
+
+        try:
+            streams: dict[str, Path | None] = {}
+            for field in ("stdout", "stderr"):
+                if (name := getattr(selection, field)) is not None:
+                    streams[field] = await member(name, partial / field)
+            # The CE's log of the job: how it went through ARC and the batch system.
+            streams["log"] = await fetch(
+                rest.diagnose_path(job_id, "errors"), partial / "log"
+            )
+            files = {
+                name: await member(name, partial / "files" / name)
+                for name in selection.files
+            }
+            shutil.rmtree(target, ignore_errors=True)  # a previous collection
+            partial.rename(target)
+        finally:
+            shutil.rmtree(partial, ignore_errors=True)
+        return OpOutcome[JobOutput](ok=True, value=JobOutput(files=files, **streams))
+
+    # -- Diagnosable -------------------------------------------------------
+
+    async def get_diagnostics(
+        self, handles: Sequence[JobHandle], filename: str | None = None
+    ) -> Mapping[JobHandle, OpOutcome[Diagnostics]]:
+        """Read the end of a file in each job's session directory, the last MiB.
+
+        The session directory is the job's working directory, and the CE serves
+        it while the job runs. ``None`` reads the job's standard output.
+        """
+        self._check_usable()
+        states = await self._states(self._ids(handles))
+        results: dict[JobHandle, OpOutcome[Diagnostics]] = {}
+        known: dict[str, list[JobHandle]] = {}
+        for handle in handles:
+            if self._owns(handle) and handle.id in states:
+                known.setdefault(handle.id, []).append(handle)
+            else:
+                results[handle] = OpOutcome[Diagnostics](ok=False, reason="unknown job")
+
+        limit = asyncio.Semaphore(PARALLEL_TRANSFERS)
+
+        async def read(job_id: str, same: list[JobHandle]) -> None:
+            async with limit:
+                outcome = await self._diagnose(job_id, filename)
+            results.update(dict.fromkeys(same, outcome))
+
+        await asyncio.gather(*(read(job_id, same) for job_id, same in known.items()))
+        return {handle: results[handle] for handle in handles}
+
+    async def _diagnose(
+        self, job_id: str, filename: str | None
+    ) -> OpOutcome[Diagnostics]:
+        try:
+            name = filename
+            if name is None:
+                description = await self._connection.read(
+                    rest.diagnose_path(job_id, "description"), READ_SCOPES
+                )
+                if description is None:
+                    return _not_read("the job was purged")
+                name = read_kept(description.decode(errors="replace")).stdout
+            if not name:
+                return _not_read("name a file in the job's directory")
+            content = await self._connection.tail(
+                rest.session_path(job_id, name), DIAGNOSTICS_BYTES, READ_SCOPES
+            )
+        except (ValueError, ResourceUnavailableError) as exc:
+            return _not_read(str(exc))
+        if content is None:
+            return _not_read(f"the job's directory has no file {name!r}")
+        diagnostics = Diagnostics(
+            filename=filename or "stdout", content=content.decode(errors="replace")
+        )
+        return OpOutcome[Diagnostics](ok=True, value=diagnostics)
+
     # -- Killable --------------------------------------------------------------
 
     async def kill(
@@ -320,6 +509,14 @@ _NOTHING_LEFT = OpOutcome[None](
 )
 
 
+def _not_collected(reason: str) -> OpOutcome[JobOutput]:
+    return OpOutcome[JobOutput](ok=False, reason=reason)
+
+
+def _not_read(reason: str) -> OpOutcome[Diagnostics]:
+    return OpOutcome[Diagnostics](ok=False, reason=reason)
+
+
 def _done(answer: rest.JobAnswer | None) -> OpOutcome[None]:
     """Read the CE's answer to a kill or a clean of one job."""
     if answer is None:
@@ -335,8 +532,10 @@ def _done(answer: rest.JobAnswer | None) -> OpOutcome[None]:
 
 # The type checker proves conformance.
 _backend: type[JobBackend] = ARCBackend
+_retriever: type[OutputRetriever] = ARCBackend
 _killable: type[Killable] = ARCBackend
 _purgeable: type[Purgeable] = ARCBackend
+_diagnosable: type[Diagnosable] = ARCBackend
 _built_by_registry: Callable[[ARCConfig, CredentialProvider], JobBackend] = (
     ARCBackend.from_settings
 )

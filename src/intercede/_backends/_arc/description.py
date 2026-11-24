@@ -16,6 +16,9 @@ a description keeps such values as they are, so they are refused.
 
 A description only says what to run and where its files go. It sets no
 policy on the job's lifetime: no holds, no automatic removal, no retries.
+
+ARC keeps the description of a job as it was sent, so it is also where the
+backend reads back what a job keeps for collection (``read_kept``).
 """
 
 from __future__ import annotations
@@ -40,6 +43,15 @@ _EXPANDED = re.compile(r"[$`\n]")
 
 _BYTES_PER_MB = 2**20
 
+# An output named so keeps all of the session directory.
+EVERYTHING = "/"
+_GLOB = re.compile(r"[*?\[]")
+
+
+def is_glob(name: str) -> bool:
+    """Tell whether an output name is a pattern; ARC reads every name literally."""
+    return _GLOB.search(name) is not None
+
 
 @dataclass(frozen=True)
 class InputFile:
@@ -54,8 +66,19 @@ class InputFile:
 class OutputFile:
     """A file the job leaves in its session directory."""
 
-    name: str  # relative to the session directory; "/" is all of it
+    name: str  # relative to the session directory: a name, or a pattern if kept
     target: str | None = None  # a URL ARC uploads it to; None: kept for the client
+
+
+@dataclass(frozen=True)
+class Kept:
+    """What a job keeps for collection, read back from its description."""
+
+    stdout: str
+    stderr: str
+    members: tuple[str, ...] = ()  # names and patterns in the session directory
+    include_unlisted: bool = False
+    staged: tuple[str, ...] = ()  # inputs, the executable and secrets
 
 
 @dataclass(frozen=True)
@@ -69,6 +92,7 @@ class JobPlan:
     environment: Mapping[str, str] = field(default_factory=dict)
     inputs: Sequence[InputFile] = ()
     outputs: Sequence[OutputFile] = ()
+    include_unlisted: bool = False  # keep every file the job leaves, inputs aside
     cpus: int = 1
     memory_mb: int | None = None
     wall_time_s: int | None = None
@@ -171,15 +195,77 @@ def _data_staging(plan: JobPlan) -> ElementTree.Element:
     for input_file in plan.inputs:
         _input_file(staging, input_file)
 
-    kept = {output_file.name for output_file in plan.outputs}
-    # ARC keeps for the client only what is listed, stdout and stderr included.
-    streams = [
-        OutputFile(name) for name in (plan.stdout, plan.stderr) if name not in kept
-    ]
-    for output_file in [*streams, *plan.outputs]:
+    for output_file in _outputs(plan):
         _output_file(staging, output_file)
 
     return staging
+
+
+def _outputs(plan: JobPlan) -> list[OutputFile]:
+    """Return the outputs a description lists, in a way ``read_kept`` reads back.
+
+    ARC keeps for the client only what is listed, stdout and stderr included,
+    and reads every name literally: a pattern keeps nothing. So a job that keeps
+    a pattern, or everything unlisted, keeps all of its session directory ("/"),
+    and the backend chooses at collection. Its patterns are listed as well, for
+    that choice: ARC finds no file of such a name, which does the job no harm.
+    With unlisted files kept, a pattern adds nothing and is left out, so a
+    description with "/" and no pattern is one that keeps everything unlisted.
+    """
+    kept = [file for file in plan.outputs if file.target is None]
+    if plan.include_unlisted:
+        kept = [file for file in kept if not is_glob(file.name)]
+    names = {file.name for file in kept}
+    streams = [OutputFile(name) for name in (plan.stdout, plan.stderr)]
+    everything = plan.include_unlisted or any(is_glob(name) for name in names)
+    return [
+        *(file for file in streams if file.name not in names),
+        *kept,
+        *([OutputFile(EVERYTHING)] if everything else []),
+        *(file for file in plan.outputs if file.target is not None),
+    ]
+
+
+def read_kept(raw: str) -> Kept:
+    """Read what a job keeps for collection from the description ARC kept of it.
+
+    Args:
+        raw: The description, as A-REX returns it.
+
+    Returns:
+        The job's streams, the outputs it keeps, and the files it was given.
+
+    Raises:
+        ValueError: The description is not one this module wrote.
+    """
+    try:
+        root = ElementTree.fromstring(raw)  # noqa: S314  (from the CE we are trusting)
+    except ElementTree.ParseError as exc:
+        raise ValueError(f"the job's description cannot be read: {exc}") from None
+    tag = f"{{{ADL_NAMESPACE}}}"
+    stdout = root.findtext(f"{tag}Application/{tag}Output")
+    stderr = root.findtext(f"{tag}Application/{tag}Error")
+    if root.tag != f"{tag}ActivityDescription" or not stdout or not stderr:
+        raise ValueError("the job's description is not one interCEde wrote")
+    staging = f"{tag}DataStaging/"
+    kept = [
+        entry.findtext(f"{tag}Name", "")
+        for entry in root.iterfind(f"{staging}{tag}OutputFile")
+        if entry.find(f"{tag}Target") is None
+    ]
+    members = tuple(
+        name for name in kept if name and name not in {EVERYTHING, stdout, stderr}
+    )
+    return Kept(
+        stdout=stdout,
+        stderr=stderr,
+        members=members,
+        include_unlisted=EVERYTHING in kept and not any(map(is_glob, members)),
+        staged=tuple(
+            entry.findtext(f"{tag}Name", "")
+            for entry in root.iterfind(f"{staging}{tag}InputFile")
+        ),
+    )
 
 
 def _input_file(staging: ElementTree.Element, file: InputFile) -> None:
