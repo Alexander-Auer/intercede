@@ -100,10 +100,11 @@ a { color: var(--accent); }
 .mode { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .mode button { border: 0; background: transparent; padding: 5px 12px; cursor: pointer; }
 .mode button.active { background: var(--accent); color: #fff; }
-button.ghost, button.primary, button.action {
+button.ghost, a.ghost, button.primary, button.action {
   border: 1px solid var(--line); background: var(--panel-2); border-radius: 8px;
   padding: 6px 14px; cursor: pointer;
 }
+a.ghost { color: inherit; text-decoration: none; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 button:disabled { opacity: .45; cursor: not-allowed; }
 button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }

@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from demo import consumer, doors, dryrun, views
+from demo import classes, consumer, doors, dryrun, views
 from demo.board import Board
 from demo.columns import Columns, compose_file, stacks
 from demo.events import Bus
@@ -155,6 +155,26 @@ async def meta() -> dict[str, Any]:
 @app.get("/api/architecture")
 async def architecture() -> dict[str, Any]:
     return views.architecture()
+
+
+@app.get("/classes")
+async def class_page() -> FileResponse:
+    """A page of its own, to look around the library's classes (demo/classes.py)."""
+    return FileResponse(STATIC / "classes.html")
+
+
+@app.get("/api/classes")
+async def class_diagram() -> dict[str, Any]:
+    return classes.model()
+
+
+@app.get("/api/classes/source")
+async def class_source(id: str) -> dict[str, Any]:  # noqa: A002 (the query parameter's name)
+    """One class's source; only for a class the diagram has."""
+    found = classes.source(id)
+    if found is None:
+        raise HTTPException(404, "no such class")
+    return found
 
 
 @app.get("/api/composition")

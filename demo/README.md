@@ -12,7 +12,8 @@ pixi run demo --up     # start every stack first, then the app
 pixi run demo --down   # stop every stack
 ```
 
-The app works fully offline: no CDN, no fonts to download, no JavaScript library at all. Without
+The app works fully offline: no CDN and no fonts to download. Its one JavaScript library,
+Mermaid for the class diagram, is shipped in `static/vendor/`. Without
 Docker it still runs: the Fake column, the static scenes, the dry run (scene 3) and Replay need
 nothing else.
 
@@ -66,6 +67,26 @@ every badge says REPLAY.
 
 If Docker or the network lets you down, switch to **Replay**: `demo/recordings/` holds a complete
 run of scenes 4–8 against the live stacks.
+
+### The class diagram
+
+**Classes** in the bar under the title opens `/classes`: every class in `intercede`, drawn with
+Mermaid from what `demo/classes.py` reads in the package when the app starts. Nothing in it is
+written by hand, so a class added to the library is on it at the next start.
+
+- **Arrows:** inherits from (a base that is an interCEde class), implements (a protocol whose
+  methods the class has with the same parameters, which is how a type checker sees it), holds (a
+  field or an attribute `__init__` sets) and uses (a method's parameter or return value).
+- **Boxes** are grouped by package. A box's stereotype says what it is: protocol, model,
+  dataclass, enumeration, exception.
+- **Looking around:** drag to move, wheel or **+/−** to zoom, **0** to fit. Click a class for its
+  docstring, fields, methods and relations; *Only its neighbours* draws that class and what it
+  touches, with room for the detail; *Source* shows its code. `/classes#SubmissionSpec` opens a
+  class directly.
+- **Filters:** areas (hover one for *only*), fields and methods, private members, "uses" arrows,
+  exceptions.
+- **Mermaid:** *Copy*, *Download .mmd* and *View* give the Mermaid text of what is drawn, to paste
+  into a document or a GitHub comment.
 
 ## Recording and replay
 
@@ -185,6 +206,8 @@ target, without the demo knowing it. The library's own suite does not collect th
 | `consumer.py` | the consumer code shown on the board, the same for every backend |
 | `board.py`, `payloads.py`, `scenarios.py` | the board, its payloads, the scripted scenes |
 | `views.py`, `dryrun.py` | the views read from the code, and the dry run |
+| `classes.py` | the class diagram's model: classes, inheritance, protocols, fields, read from the package |
 | `recording.py`, `recordings/` | record and replay, and the committed live run |
 | `scripts/fetch_ci.py`, `data/ci.json` | reading the CI runs from GitHub, and the last result |
 | `static/` | the browser side: plain ES modules, SVG and CSS, no build step |
+| `static/vendor/` | third-party code shipped as it is: Mermaid 11.4.1 and its licence |

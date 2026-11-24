@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>interCEde, classes</title>
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/classes.css">
+</head>
+<body class="classes-page">
+  <header class="top">
+    <a class="brand" href="/"><img src="/static/icon.svg" alt=""> interCEde</a>
+    <div class="scene-title">
+      <h1>Class diagram</h1>
+      <p id="caption">Read from the code.</p>
+    </div>
+    <div class="badges"><span class="badge LIVE">FROM CODE</span></div>
+  </header>
+
+  <div class="explorer">
+    <aside class="side" aria-label="What to show">
+      <input id="search" type="search" placeholder="Find a class…" autocomplete="off" list="names">
+      <datalist id="names"></datalist>
+
+      <section>
+        <h2>Show</h2>
+        <label><input type="checkbox" id="show-members" checked> fields and methods</label>
+        <label><input type="checkbox" id="show-private"> private members</label>
+        <label><input type="checkbox" id="show-uses"> “uses” arrows</label>
+        <label><input type="checkbox" id="show-exceptions" checked> exceptions</label>
+      </section>
+
+      <section>
+        <h2>Areas <button id="all-areas" class="link">all</button> <button id="no-areas" class="link">none</button></h2>
+        <div id="areas"></div>
+      </section>
+
+      <section>
+        <h2>Arrows</h2>
+        <dl class="legend">
+          <dt>──▷</dt><dd>inherits from</dd>
+          <dt>┄┄▷</dt><dd>implements the protocol</dd>
+          <dt>──&gt;</dt><dd>holds, as a field</dd>
+          <dt>┄┄&gt;</dt><dd>uses, in a method</dd>
+        </dl>
+      </section>
+
+      <section>
+        <h2>Mermaid</h2>
+        <div class="row tight">
+          <button id="copy" class="ghost">Copy</button>
+          <button id="download" class="ghost">Download .mmd</button>
+          <button id="view-source" class="ghost">View</button>
+        </div>
+      </section>
+    </aside>
+
+    <main class="canvas-wrap">
+      <div id="focus-bar" class="focus-bar" hidden></div>
+      <div id="canvas" class="canvas" tabindex="0" aria-label="Class diagram: drag to move, wheel to zoom">
+        <div id="drawing" class="drawing"></div>
+      </div>
+      <div class="zoom">
+        <button id="zoom-in" class="ghost" title="Zoom in (+)">+</button>
+        <button id="zoom-out" class="ghost" title="Zoom out (−)">−</button>
+        <button id="zoom-fit" class="ghost" title="Fit (0)">Fit</button>
+      </div>
+      <div id="status" class="status muted"></div>
+    </main>
+
+    <aside id="detail" class="detail" hidden></aside>
+  </div>
+
+  <dialog id="source-dialog" class="source-dialog">
+    <form method="dialog"><button class="ghost close">Close</button></form>
+    <h2 id="source-title"></h2>
+    <pre id="source-text" class="code"></pre>
+  </dialog>
+
+  <script src="/static/vendor/mermaid-11.4.1/mermaid.min.js"></script>
+  <script type="module" src="/static/classes.js"></script>
+</body>
+</html>

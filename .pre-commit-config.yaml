@@ -22,10 +22,13 @@ repos:
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
+        exclude: ^demo/static/vendor/ # third-party files, kept byte for byte
       - id: end-of-file-fixer
+        exclude: ^demo/static/vendor/
       - id: check-yaml
         args: ["--unsafe"]
       - id: check-added-large-files
+        exclude: ^demo/static/vendor/ # Mermaid for the class diagram, so the demo works offline
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: "v0.14.14"
