@@ -26,7 +26,7 @@ from typing import Any, Self, TypeVar
 
 import asyncssh
 
-from intercede._backends.batch.protocols import Command, CommandResult
+from intercede._backends.batch.protocols import Command, CommandResult, Transport
 from intercede._backends.credentials import credential_requirements, refresh_if_stale
 from intercede.auth.models import Credential, SSHPassword, SSHPrivateKey
 from intercede.auth.protocols import CredentialProvider
@@ -392,3 +392,7 @@ def _text(output: bytes | str | None) -> str:
     if isinstance(output, bytes):
         return output.decode(errors="replace")
     return output or ""
+
+
+# The type checker proves conformance.
+_transport: type[Transport] = SSHTransport
