@@ -31,6 +31,9 @@ from intercede.exceptions import AuthenticationError, ResourceUnavailableError
 # may take, in seconds; not the whole request, so a large upload is not cut off.
 TIMEOUT_S = 60
 
+# How many files one operation moves at once.
+PARALLEL_TRANSFERS = 4
+
 # What A-REX answers, with HTTP status 500, when it refuses a token: the
 # identity it found maps to no configuration.
 _NO_CONFIGURATION = "User can't be assigned configuration"
