@@ -22,9 +22,9 @@ Dockerfiles for the stacks are in `tests/integration/stacks/_images/<name>/`, fo
    everything it needs. See [Renovate](renovate.md).
 3. **No systemd, logs to stdout/stderr.** See rules 3 and 4 in
    [Rules for a stack](integration-stacks.md#rules-for-a-stack).
-4. **Credentials are created when the container starts**, by the entrypoint. For example ARC
-   creates a test CA, a host certificate and a client certificate with `arcctl test-ca`, and
-   HTCondor creates IDTOKENS. See rules 6 and 9 in
+4. **Credentials are created when the container starts**, by the entrypoint. For example the ARC
+   image creates a test CA and a host certificate with `openssl`, and a token with
+   `arcctl test-jwt`, and HTCondor creates IDTOKENS. See rules 6 and 9 in
    [Rules for a stack](integration-stacks.md#rules-for-a-stack).
 5. **The version is a build argument**, so one Dockerfile can build every version listed in
    `versions`. Renovate updates only the default value of the `ARG`.

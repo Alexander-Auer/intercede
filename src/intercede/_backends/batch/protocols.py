@@ -1,6 +1,8 @@
 """Internal collaborator protocols of the composed backend.
 
-Shapes only: transports and schedulers are implemented in later issues.
+Transports are implemented in ``transport``, schedulers in ``scheduler``. Moving
+a job's files is neither's job alone: the backend does it, with nothing but
+``Transport.put`` and ``get``, so it is not a third collaborator (``Stager``).
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ from typing import Protocol, Self, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
-from intercede.models import CopyVars, JobID, JobStatus, SubmissionSpec
+from intercede.models import JobID, JobStatus, SubmissionSpec
 
 Command = Sequence[str]  # an argv: only argv and staged files ever cross the transport
 # One resource, so its own IDs are unique: no need for handles here.
@@ -29,13 +31,33 @@ class CommandResult(BaseModel):
     stderr: str
 
 
+class SubmitCommand(BaseModel):
+    """What queues a submission: a command, and the files it needs on the resource."""
+
+    model_config = ConfigDict(frozen=True)
+
+    argv: Command
+    files: Mapping[str, str] = {}  # name in the working directory -> content
+
+
 @runtime_checkable
 class Transport(Protocol):
     """How InterCEde reaches a resource: local shell, SSH, ...
 
     Transports hold connections, so they share the backend lifecycle: cheap
     construction with no I/O, and an idempotent close.
+
+    Every transport behaves the same, so a backend never asks which one it has.
+    Commands start in the account's home directory on the resource, and a
+    relative path on the resource is relative to it. The caller picks every
+    timeout: it knows whether a call queries a job or stages gigabytes.
+
+    Attributes:
+        resource: Which resource it reaches, for job handles and error messages.
+
     """
+
+    resource: str
 
     async def __aenter__(self) -> Self: ...
 
@@ -46,45 +68,63 @@ class Transport(Protocol):
         tb: TracebackType | None,
     ) -> None: ...
 
-    async def run(self, argv: Command) -> CommandResult:
+    async def run(self, argv: Command, *, timeout: float) -> CommandResult:
         """Run one command on the resource and wait for it to finish.
 
         Args:
-            argv: The program and its arguments. Never passed through a shell.
+            argv: The program and its arguments. Each argument reaches the
+                program exactly as given, whatever characters it holds.
+            timeout: How long the command may take, in seconds.
 
         Returns:
             The exit code and everything the command printed. A non-zero exit
             code is returned, not raised: the scheduler decides what it means.
+            As in a shell, a program that does not exist exits with 127, and
+            one that cannot be executed with 126.
 
         Raises:
-            ResourceUnavailableError: The resource could not be reached.
+            ResourceUnavailableError: The resource could not be reached, or
+                the command did not finish within ``timeout``.
             AuthenticationError: The resource rejected the credentials.
 
         """
         ...
 
-    async def put(self, local: Path, remote: str) -> None:
+    async def put(self, local: Path, remote: str, *, timeout: float) -> None:
         """Copy a file or directory from this host to the resource.
+
+        ``remote`` is the path the copy gets, never a directory to copy into:
+        an existing file there is replaced, and an existing directory receives
+        the copied directory's contents. Missing parent directories are
+        created, and permission bits are kept, so an executable stays one.
 
         Args:
             local: The file or directory on this host.
-            remote: Its destination path on the resource.
+            remote: The path of the copy on the resource.
+            timeout: How long the copy may take, in seconds.
 
         Raises:
-            ResourceUnavailableError: The copy failed.
+            ResourceUnavailableError: The copy failed, or did not finish
+                within ``timeout``.
+            AuthenticationError: The resource rejected the credentials.
 
         """
         ...
 
-    async def get(self, remote: str, local: Path) -> None:
+    async def get(self, remote: str, local: Path, *, timeout: float) -> None:
         """Copy a file or directory from the resource to this host.
+
+        The mirror of ``put``: ``local`` is the path the copy gets.
 
         Args:
             remote: The file or directory on the resource.
-            local: Its destination path on this host.
+            local: The path of the copy on this host.
+            timeout: How long the copy may take, in seconds.
 
         Raises:
-            ResourceUnavailableError: The copy failed.
+            ResourceUnavailableError: The copy failed, or did not finish
+                within ``timeout``.
+            AuthenticationError: The resource rejected the credentials.
 
         """
         ...
@@ -96,7 +136,14 @@ class Scheduler(Protocol):
 
     A scheduler never runs anything itself; the backend runs its commands
     through the transport. Its methods are pure, so they are tested without a
-    resource.
+    resource. It never sees a copy's environment or secrets: the backend stages
+    a script that starts a copy (see ``layout``), and all a scheduler does is
+    queue that script once per copy.
+
+    The parsers receive the whole result, since whether an exit code is a
+    failure depends on the command: a tool that says it knows no such job has
+    answered the question. A parser raises ``ValueError`` for a command that
+    failed or printed something unreadable, which fails the whole operation.
 
     Attributes:
         stages_own_files: Whether the scheduler moves the job's files itself.
@@ -106,39 +153,60 @@ class Scheduler(Protocol):
 
     stages_own_files: bool
 
-    def submit_command(
-        self, spec: SubmissionSpec, copies: Sequence[CopyVars], workdir: str
-    ) -> Command:
-        """Build the command that queues every copy of ``spec``.
+    def is_job_id(self, value: str) -> bool:
+        """Tell whether a stored ID can be one of this scheduler's.
+
+        IDs come back from stored handles and end up on command lines, so one
+        is checked first: a malformed one could pass as an option, or make a
+        tool refuse the valid IDs asked about with it.
 
         Args:
-            spec: What every copy shares.
-            copies: One entry per copy, in copy order.
-            workdir: The directory on the resource where the files were staged.
+            value: The ID to check.
 
         Returns:
-            The command to run through the transport.
+            True when it has the form of a job ID.
 
         """
         ...
 
-    def parse_submit(self, raw: str) -> Sequence[JobID]:
-        """Read the job IDs from the output of the submit command.
+    def submit_command(
+        self, spec: SubmissionSpec, count: int, workdir: str
+    ) -> SubmitCommand:
+        """Build what queues ``count`` copies of ``spec``.
 
         Args:
-            raw: What the submit command printed.
+            spec: What every copy shares; the scheduler reads its resources.
+            count: How many copies to queue.
+            workdir: The directory on the resource that holds the submission
+                (see ``layout``); the returned files are staged there first.
 
         Returns:
-            One ID per copy, in copy order.
+            The command to run through the transport, and its files.
 
         Raises:
-            ValueError: ``raw`` does not hold one ID per copy.
+            SpecificationRejectedError: The scheduler cannot express ``spec``.
+
+        """
+        ...
+
+    def parse_submit(self, result: CommandResult, count: int) -> Sequence[JobID]:
+        """Read the job IDs from the outcome of the submit command.
+
+        Args:
+            result: The outcome of the submit command.
+            count: How many copies it queued.
+
+        Returns:
+            ``count`` IDs, in copy order.
+
+        Raises:
+            ValueError: Nothing was queued, or the output cannot be read.
 
         """
         ...
 
     def status_command(self, ids: Sequence[JobID]) -> Command:
-        """Build the command that reports the state of the given jobs.
+        """Build the command that asks the queue about the given jobs.
 
         Args:
             ids: The jobs to ask about.
@@ -149,16 +217,52 @@ class Scheduler(Protocol):
         """
         ...
 
-    def parse_status(self, raw: str, ids: Sequence[JobID]) -> SchedulerStatusMap:
-        """Read the jobs' states from the output of the status command.
+    def parse_status(
+        self, result: CommandResult, ids: Sequence[JobID]
+    ) -> SchedulerStatusMap:
+        """Read the jobs' states from the outcome of the status command.
 
         Args:
-            raw: What the status command printed.
+            result: The outcome of the status command.
             ids: The jobs that were asked about.
 
         Returns:
-            A status for every ID in ``ids``; an ID missing from ``raw`` is
-            ``UNKNOWN``.
+            The status of the jobs the queue knows. The backend asks the
+            history about the others.
+
+        Raises:
+            ValueError: The command failed, or its output cannot be read.
+
+        """
+        ...
+
+    def history_command(self, ids: Sequence[JobID]) -> Command:
+        """Build the command that asks about jobs that have left the queue.
+
+        Args:
+            ids: The jobs to ask about.
+
+        Returns:
+            The command to run through the transport.
+
+        """
+        ...
+
+    def parse_history(
+        self, result: CommandResult, ids: Sequence[JobID]
+    ) -> SchedulerStatusMap:
+        """Read the jobs' states from the outcome of the history command.
+
+        Args:
+            result: The outcome of the history command.
+            ids: The jobs that were asked about.
+
+        Returns:
+            The status of the jobs the history knows; the others are
+            ``UNKNOWN`` to the consumer.
+
+        Raises:
+            ValueError: The command failed, or its output cannot be read.
 
         """
         ...

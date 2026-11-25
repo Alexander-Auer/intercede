@@ -16,15 +16,17 @@ as a parsed TOML table, to ``validate_config`` or ``registry.get_backend``::
     known_hosts = "batch.example.org ssh-ed25519 AAAA..."
 
 Configuration describes the resource and is never secret: keys, passwords,
-tokens and proxies come from the credential provider at run time. Error
+and tokens come from the credential provider at run time. Error
 messages therefore never repeat the values they were given. The kinds are a
 closed set: they list what interCEde ships.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import Annotated, Any, Literal, Self
+from urllib.parse import urlsplit
 
 from pydantic import (
     BaseModel,
@@ -91,6 +93,10 @@ class _QueueConfig(_Config):
 
 # -- grid CEs that schedule by themselves -------------------------------------
 
+_HOST_PORT = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::\d{1,5})?")
+# "host" or "name@host": no leading "-" and no spaces, so never read as an option.
+_SCHEDD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*(?:@[A-Za-z0-9][A-Za-z0-9.-]*)?")
+
 
 class ARCConfig(_QueueConfig):
     """An ARC CE."""
@@ -101,14 +107,15 @@ class ARCConfig(_QueueConfig):
     endpoint: str
     """The CE's REST endpoint, e.g. ``"https://arc.example.org:443/arex"``."""
 
-    auth: frozenset[Literal["token", "proxy"]] = frozenset({"token"})
-    """Which credentials the provider must supply, all of them together: a token
-    for the channel, a proxy for delegation, or both."""
-
     @model_validator(mode="after")
-    def _auth_not_empty(self) -> Self:
-        if not self.auth:
-            raise ValueError("auth must name at least one of 'token', 'proxy'")
+    def _endpoint_is_https(self) -> Self:
+        # A-REX serves its REST interface over HTTPS only, and a token goes with
+        # every request.
+        url = urlsplit(self.endpoint)
+        if url.scheme != "https" or not url.hostname:
+            raise ValueError(
+                "endpoint must be an https:// URL, e.g. 'https://arc.example.org:443/arex'"
+            )
         return self
 
 
@@ -121,15 +128,20 @@ class HTCondorCEConfig(_QueueConfig):
     endpoint: str
     """The CE's collector, as ``"host"`` or ``"host:port"``, e.g. ``"ce.example.org:9619"``."""
 
-    auth: frozenset[Literal["token", "proxy"]] = frozenset({"token"})
-    """Which credentials the provider must supply. The token authenticates the
-    channel; ``"proxy"`` adds an X.509 proxy for sites that account on VOMS attributes."""
+    schedd: str | None = None
+    """The CE's schedd, when it is not named after the endpoint's host: ``"name@host"``
+    for one of several CEs on one host, or a CE behind a forwarded address."""
 
     @model_validator(mode="after")
-    def _token_required(self) -> Self:
-        if "token" not in self.auth:
+    def _names_fit_a_command_line(self) -> Self:
+        # Both end up on the tools' command lines, as "-pool host:port -name schedd".
+        if not _HOST_PORT.fullmatch(self.endpoint):
             raise ValueError(
-                "an HTCondor-CE authenticates with a token; auth must include 'token'"
+                "endpoint must be 'host' or 'host:port', e.g. 'ce.example.org:9619'"
+            )
+        if self.schedd is not None and not _SCHEDD.fullmatch(self.schedd):
+            raise ValueError(
+                "schedd must be 'host' or 'name@host', e.g. 'ce01@ce.example.org'"
             )
         return self
 
@@ -191,12 +203,25 @@ class CloudConfig(_Config):
 # -- a batch system reached through a transport --------------------------------
 
 
+_JUMP_HOST = re.compile(rf"(?:[^@:\s]+@)?{_HOST_PORT.pattern}")
+
+
 class _BatchConfig(_QueueConfig):
     kind: Literal["batch"]
     """Selects a batch system; ``transport`` then selects the model."""
 
     scheduler: Literal["slurm", "htcondor", "direct"]
     """The batch system on the resource; ``"direct"`` runs jobs without one."""
+
+    workdir: str = ".intercede"
+    """Where on the resource jobs' files are kept until they are purged; relative
+    to the home directory unless absolute. The workers must see it too."""
+
+    @model_validator(mode="after")
+    def _workdir_is_a_path(self) -> Self:
+        if not self.workdir.strip() or self.workdir.startswith("-"):
+            raise ValueError("workdir must be a path, and not start with '-'")
+        return self
 
 
 class BatchLocalConfig(_BatchConfig):
@@ -228,7 +253,9 @@ class BatchSSHConfig(_BatchConfig):
     """How to log in: a key or a password from the credential provider, or an SSH agent."""
 
     jump_host: str | None = None
-    """A host to connect through, as ``"[user@]host[:port]"``."""
+    """A host to connect through, as ``"[user@]host[:port]"``. It is logged in
+    to with the same credentials, and its key must be in ``known_hosts`` too;
+    the user defaults to ``user``."""
 
     connect_timeout_s: PositiveInt = 30
     """How long connecting may take, in seconds."""
@@ -237,6 +264,14 @@ class BatchSSHConfig(_BatchConfig):
     def _known_hosts_not_empty(self) -> Self:
         if not self.known_hosts.strip():
             raise ValueError("known_hosts must hold the expected host keys")
+        return self
+
+    @model_validator(mode="after")
+    def _jump_host_form(self) -> Self:
+        if self.jump_host is not None and not _JUMP_HOST.fullmatch(self.jump_host):
+            raise ValueError(
+                "jump_host must be '[user@]host[:port]', e.g. 'dirac@gw.example.org:2222'"
+            )
         return self
 
 

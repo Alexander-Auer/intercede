@@ -44,6 +44,7 @@ tests/integration/
 | `versions` | no | Backend versions to test, for example `[lts, latest]`. Default: `[latest]`. |
 | `markers` | yes | `pytest -m` expression that selects the tests for this stack. |
 | `exec_in_container` | no | `true`: run pytest inside the backend container. Default: `false`. |
+| `workers` | no | How many tests run at the same time (pytest-xdist). Default: `4`. Set `1` for a backend that cannot take several jobs at once. |
 
 ## When a stack gets CI jobs
 
@@ -68,11 +69,13 @@ tests would run in both jobs. Add the same `and not ssh` to every new `local-*` 
 ## `exec_in_container: true`
 
 pytest runs inside the backend container, and interCEde talks to the scheduler directly, without
-SSH. For this to work (still to do, see #13 and #14):
+SSH. For this to work:
 
-- the image must contain pytest and the tests;
-- pytest must run as a normal user, not root, because HTCondor and Slurm refuse to run jobs as
-  root.
+- the image contains Python and what the suite needs (`/opt/suite` in the Slurm image);
+- `compose.yml` mounts the repository read-only and starts there (`working_dir`), so the tests are
+  the ones you have checked out;
+- pytest runs as a normal user, not root, because HTCondor and Slurm refuse to run jobs as root
+  (`dirac` in the Slurm image).
 
 ## Rules for a stack
 
@@ -99,7 +102,9 @@ Review checks these rules. `test_manifest.py` checks the file layout.
 9. **The host can reach it** (only when `exec_in_container` is `false`). Publish the backend port
    on `localhost` (compose `ports:`) and put the same `host:port` in `intercede-client.toml`. A
    TLS certificate must be valid for the name the client uses: create it for both the compose
-   hostname and `localhost`. ARC on EL9 also needs the crypto policy set to `LEGACY`.
+   hostname and `localhost`. Its CA needs the `keyUsage` extension: Python 3.13 and later refuse
+   a CA without it, such as the one `arcctl test-ca` makes. Write the CA in the `X509_CERT_DIR`
+   layout to `certificates/` in the credentials folder: the tests then set `X509_CERT_DIR` to it.
 
 ## pytest options and fixtures
 
@@ -111,10 +116,26 @@ Defined in `tests/conftest.py` (options) and `tests/integration/conftest.py` (fi
 | `--config` | option | Configuration name. Default: `basic`. |
 | `stack` | fixture | The stack's entry from `stacks.yml`. |
 | `stack_dir` | fixture | Folder with the stack's `compose.yml`. |
-| `client_config` | fixture | The stack's `intercede-client.toml`, already parsed. |
+| `client_config` | fixture | The stack's `intercede-client.toml`, already parsed. For type `ssh-key`, `[backend]` also gets the `known_hosts` file the stack created when it started. |
+| `refusals` | fixture | What `[refusals]` in `intercede-client.toml` says the backend cannot honour: `containers`, `url_inputs`, `url_outputs`. The shared suite checks each is refused at submit. |
+| `credentials` | fixture | A credential provider holding what `[credentials]` points to (types: `token`, `ssh-key`). Skips the test on a stack that needs none. |
+| `backend_credentials` | fixture | What a backend is built with: `credentials`, or an empty provider on a stack that needs none. |
+| `backend` | fixture | The backend `[backend]` describes, built by the registry and open. |
+| `credential` | fixture | The credential `[credentials]` points to, read from the stack's credentials folder. |
+| `rejected_credentials` | fixture | A provider holding a credential of the right kind that the resource rejects. |
+| `unreachable_config` | fixture | `[backend]`, pointed at a closed port, as when the resource is down. |
+| `output_retriever`, `killable`, `purgeable` | fixture | The backend as that capability; skips the test when the backend does not have it. |
+| `transport`, `remote`, `here` | fixture | A composed backend's transport on its own, an empty directory on the resource and one on this host; what `test_transport.py` runs on. |
 
 If `intercede-client.toml` is missing, the test fails in CI (when `$CI` is set) and is skipped
 locally. In CI, a job where every test is skipped would look green but test nothing.
 
-Markers, defined in `pyproject.toml`: `remote`, `scheduler`, `arc`, `htcondor`, `slurm`, `ssh`,
-`destructive_fetch`.
+Markers, defined in `pyproject.toml`: `contract`, `remote`, `scheduler`, `arc`, `htcondor`,
+`slurm`, `ssh`, `destructive_fetch`.
+
+Tests marked `contract` are the shared suite and run on every stack: with `--stack`, they get the
+markers that the stack's `markers` expression asks for, so `-m "<markers>"` selects them. The
+other markers select tests for behaviour only some backends have.
+
+A stack can land before its backend. Until the registry has a backend for the stack's `kind`, the
+shared suite is skipped on it, with the reason, and only the stack's own tests run.
