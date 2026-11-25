@@ -16,7 +16,7 @@ from fnmatch import fnmatchcase
 from pathlib import PurePosixPath
 
 from intercede._backends.batch import layout
-from intercede._backends.batch.job import Manifest
+from intercede._backends.batch.staging import Manifest
 
 
 @dataclass(frozen=True)
