@@ -7,15 +7,77 @@ these are plain functions and values, never a base class.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import asyncio
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from pathlib import Path
+from typing import TypeVar
 
 from intercede.exceptions import SpecificationRejectedError
-from intercede.models import CopyVars, FileRef, JobStatus, SubmissionSpec
+from intercede.models import (
+    CopyVars,
+    FileRef,
+    JobHandle,
+    JobID,
+    JobStatus,
+    StatusMap,
+    SubmissionSpec,
+)
+
+T = TypeVar("T")
 
 # A job in one of these can still be cancelled; in any other it has finished,
 # or the backend no longer knows it.
 ACTIVE = frozenset({JobStatus.SUBMITTED, JobStatus.WAITING, JobStatus.RUNNING})
+
+
+def owned_ids(
+    handles: Iterable[JobHandle], owns: Callable[[JobHandle], bool]
+) -> list[JobID]:
+    """Return the ids to ask the resource about: those ``owns`` accepts, each once.
+
+    Handles come from the consumer's storage, so ``owns`` checks each one
+    before its id reaches a command line, a path or a URL.
+    """
+    return list(dict.fromkeys(handle.id for handle in handles if owns(handle)))
+
+
+def statuses(
+    handles: Sequence[JobHandle],
+    owns: Callable[[JobHandle], bool],
+    states: Mapping[JobID, JobStatus],
+) -> StatusMap:
+    """Return the status of each handle, in the caller's order.
+
+    Args:
+        handles: As ``get_status`` was given them.
+        owns: Whether a handle is the backend's, and well-formed.
+        states: The state of each job the resource knows.
+
+    Returns:
+        ``UNKNOWN`` for a handle that is not the backend's, or whose job the
+        resource does not know.
+    """
+    return {
+        handle: states.get(handle.id, JobStatus.UNKNOWN)
+        if owns(handle)
+        else JobStatus.UNKNOWN
+        for handle in handles
+    }
+
+
+async def in_parallel(work: Iterable[Awaitable[T]], limit: int) -> list[T]:
+    """Await every item of ``work``, at most ``limit`` at a time.
+
+    Returns:
+        The results, in the order of ``work``.
+    """
+    semaphore = asyncio.Semaphore(limit)
+
+    async def one(item: Awaitable[T]) -> T:
+        async with semaphore:
+            return await item
+
+    return await asyncio.gather(*(one(item) for item in work))
 
 
 def copies_of(spec: SubmissionSpec, copies: int | Sequence[CopyVars]) -> list[CopyVars]:

@@ -5,9 +5,13 @@ The backend speaks HTTPS to the CE with a bearer token, as DIRAC's
 one request, and the files a job needs from this host are uploaded to its
 session directory afterwards. No ARC client tools are needed on this host.
 
-- ``backend``: the contract operations (submit, status)
+- ``backend``: the backend, joining the modules of its capabilities
+- ``jobs``: which handles are ours, and the states of their jobs (status)
+- ``submit``, ``output``, ``cancel`` (kill and purge), ``diagnostics``: one
+  capability each
 - ``connection``: the requests, each with the token of its operation
 - ``staging``: what each copy's description says, and what is uploaded
+- ``collect``: what to collect of a job's output, from a listing of its directory
 
 What interCEde knows about ARC itself (job descriptions, the paths and answers
 of the interface, the state mapping) lives in ``_backends._arc``.

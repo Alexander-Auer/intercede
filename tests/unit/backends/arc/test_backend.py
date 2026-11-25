@@ -31,7 +31,7 @@ from intercede import (
     SpecificationRejectedError,
 )
 from intercede._backends.monolith.arc import ARCBackend
-from intercede._backends.monolith.arc.backend import DIAGNOSTICS_BYTES
+from intercede._backends.monolith.arc.diagnostics import DIAGNOSTICS_BYTES
 
 from ._fake_arc import ENDPOINT, SPEC, FakeARC, ScopedTokens, make
 

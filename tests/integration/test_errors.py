@@ -16,6 +16,7 @@ from intercede import registry
 from intercede.auth.providers import StaticCredentials
 from intercede.exceptions import (
     AuthenticationError,
+    InterCEdeError,
     ResourceUnavailableError,
     SpecificationRejectedError,
 )
@@ -29,7 +30,13 @@ from intercede.models import (
     OutputSpec,
     SubmissionSpec,
 )
-from intercede.protocols import JobBackend, Killable, OutputRetriever, Purgeable
+from intercede.protocols import (
+    Diagnosable,
+    JobBackend,
+    Killable,
+    OutputRetriever,
+    Purgeable,
+)
 from tests.integration.jobs import release, script, wait_for
 
 pytestmark = pytest.mark.contract
@@ -97,6 +104,14 @@ async def test_a_resource_that_is_down(
                 await down.get_status([stored])
     finally:
         await release(backend, [handle])
+
+
+async def test_a_closed_backend(backend: JobBackend, tmp_path: Path):
+    """Closing twice is harmless, and a closed backend does no more work."""
+    await backend.__aexit__(None, None, None)
+    await backend.__aexit__(None, None, None)
+    with pytest.raises(InterCEdeError):
+        await backend.submit(SubmissionSpec(executable=script(tmp_path, "true")))
 
 
 # --------------------------------------------------------------------------
@@ -201,6 +216,8 @@ async def test_a_job_of_another_resource(backend: JobBackend, tmp_path: Path):
             outcomes.append(await backend.kill([theirs]))
         if isinstance(backend, Purgeable):
             outcomes.append(await backend.purge([theirs]))
+        if isinstance(backend, Diagnosable):
+            outcomes.append(await backend.get_diagnostics([theirs]))
         for outcome in outcomes:
             assert not outcome[theirs].ok and outcome[theirs].reason
     finally:
