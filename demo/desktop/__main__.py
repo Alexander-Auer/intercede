@@ -39,7 +39,8 @@ def main(argv: list[str] | None = None) -> int:
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
 
-    from .window import Window, checkout_python, icon_svg
+    from .window import Window
+    from .work import checkout_python, icon_svg
 
     app = QApplication([sys.argv[0], *qt_args])
     app.setOrganizationName("intercede")

@@ -38,6 +38,8 @@ New:
   later; the caption says which branch it was read from, and when. **F5** reads it again by hand.
 - **Open** opens the class in VS Code (`code -g`), or in the default editor.
 - The theme follows the system, or is set to light or dark.
+- A chosen class's arrows are drawn in blue and the others fade, so what it touches stands
+  out. The source view has line numbers.
 
 ## Why it is quick
 
@@ -46,7 +48,7 @@ New:
 | opening, diagram drawn | 2.5–2.8 s | 0.25 s (1 s the very first time) |
 | a view not drawn before ("uses", members) | 1.2–3 s | about 0.2 s |
 | a view drawn before, also after a restart | 1.2–3 s | 15–30 ms |
-| one step of panning or zooming, painted | — | 7–10 ms |
+| one step of panning or zooming, painted | — | 7–14 ms |
 
 Measured on the development laptop, with the 84 classes of the package.
 
@@ -64,8 +66,11 @@ Measured on the development laptop, with the 84 classes of the package.
 | --- | --- |
 | `extract.py` | run by the checkout's own Python (`.pixi/envs/py313`): prints the model of `demo/classes.py`, and each class's source, as JSON |
 | `diagram.py` | what is drawn, the Mermaid text, the Graphviz input and reading its layout; no Qt, tested on its own |
-| `items.py` | the boxes, arrows and areas as Qt items, and the colours of `static/style.css` |
-| `window.py` | the window, reading the code when it changes, laying out in the background |
+| `items.py` | the boxes, arrows and areas as Qt items |
+| `style.py` | the look: the colours of `static/style.css`, fonts, icons, the stylesheet, the switch |
+| `widgets.py` | the canvas and its floating controls, the code view, an area's row |
+| `work.py` | reading the code and laying it out, in processes of their own, and the layouts kept |
+| `window.py` | the window: what is drawn, the class panel, following the code |
 | `install.py` | the installer |
 | `pixi.toml` | the app's environment |
 

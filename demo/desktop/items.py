@@ -7,74 +7,39 @@ exactly the size they are drawn.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import (
-    QBrush,
     QColor,
     QFont,
+    QFontInfo,
     QFontMetricsF,
     QPainter,
     QPainterPath,
     QPen,
-    QPolygonF,
 )
-from PySide6.QtWidgets import QGraphicsItem, QStyleOptionGraphicsItem, QWidget
+from PySide6.QtWidgets import (
+    QGraphicsItem,
+    QGraphicsSceneHoverEvent,
+    QStyleOptionGraphicsItem,
+    QWidget,
+)
 
 from .diagram import Member
-
-# The web page's colours (demo/static/style.css), light and dark.
-THEMES: dict[str, dict[str, str]] = {
-    "light": {
-        "bg": "#f6f7f9",
-        "panel": "#ffffff",
-        "panel-2": "#eef0f4",
-        "ink": "#12161c",
-        "ink-2": "#4a5361",
-        "line": "#d3d8e0",
-        "accent": "#1f6feb",
-        "focus": "#ff9f1c",
-        "failed": "#d0312d",
-        "done": "#1a8f4c",
-        "waiting": "#c98a00",
-    },
-    "dark": {
-        "bg": "#0d1117",
-        "panel": "#161b22",
-        "panel-2": "#1f2630",
-        "ink": "#eef2f6",
-        "ink-2": "#a5b0be",
-        "line": "#303844",
-        "accent": "#58a6ff",
-        "focus": "#ff9f1c",
-        "failed": "#f0524d",
-        "done": "#2ea860",
-        "waiting": "#e3a700",
-    },
-}
-
-# A kind's fill: a share of a colour mixed into the panel, as classes.css does.
-_KIND_FILL = {
-    "protocol": ("accent", 0.14),
-    "exception": ("failed", 0.12),
-    "model": ("done", 0.10),
-    "dataclass": ("done", 0.10),
-    "enumeration": ("waiting", 0.14),
-}
-
-
-def mix(colour: str, share: float, into: str) -> QColor:
-    """``color-mix(in srgb, colour share, into)``."""
-    a, b = QColor(colour), QColor(into)
-    return QColor.fromRgbF(
-        a.redF() * share + b.redF() * (1 - share),
-        a.greenF() * share + b.greenF() * (1 - share),
-        a.blueF() * share + b.blueF() * (1 - share),
-    )
+from .style import (
+    LINE_STYLE,
+    THEMES,
+    caps,
+    draw_head,
+    is_dark,
+    kind_colour,
+    mix,
+    mono,
+    sans,
+)
 
 
 @dataclass(frozen=True)
@@ -89,35 +54,53 @@ class Fonts:
 
     @classmethod
     def default(cls) -> Fonts:
-        def font(px: int, *, bold: bool = False, italic: bool = False) -> QFont:
-            f = QFont()  # the system's sans
-            f.setPixelSize(px)
-            f.setBold(bold)
-            f.setItalic(italic)
-            return f
-
         return cls(
-            name=font(14, bold=True),
-            kind=font(11, italic=True),
-            member=font(12),
-            title=font(12, bold=True),
-            label=font(11),
+            name=sans(14, QFont.Weight.Bold),
+            kind=caps(9.5),
+            member=mono(11.5),
+            title=sans(12.5, QFont.Weight.Bold),
+            label=sans(10.5),
         )
 
 
-_PAD_X = 12
-_PAD_Y = 7
-_GAP = 6  # between the header and the members
+_PAD_X = 14
+_PAD_Y = 8
+_MEMBERS_PAD = 7
+_RADIUS = 7.0
+_SHADOW = 3.0  # how far a box's shadow reaches below it
+
+
+_WIDTHS: dict[tuple[str, str], float] = {}
+
+
+def width(text: str, font: QFont) -> float:
+    """How wide ``text`` is drawn: measured once per font, and by counting for code.
+
+    Shaping text is the costly part of drawing the diagram (a tenth of a millisecond a
+    line), so widths are kept; in the monospaced font of members a line's width is its
+    length times one character's.
+    """
+    key = (font.key(), text)
+    if (known := _WIDTHS.get(key)) is not None:
+        return known
+    metrics = QFontMetricsF(font)
+    if (
+        QFontInfo(font).fixedPitch() and text.isascii()
+    ):  # the font loaded, not asked for
+        measured = len(text) * metrics.horizontalAdvance("M")
+    else:
+        measured = metrics.horizontalAdvance(text)
+    _WIDTHS[key] = measured
+    return measured
 
 
 def text_size(text: str, font: QFont, pad: float = 0) -> tuple[float, float]:
     """The size of one line of text, with ``pad`` around it."""
-    m = QFontMetricsF(font)
-    return m.horizontalAdvance(text) + 2 * pad, m.height() + 2 * pad
+    return width(text, font) + 2 * pad, QFontMetricsF(font).height() + 2 * pad
 
 
 class ClassItem(QGraphicsItem):
-    """One class: its kind and name, and its members when they are shown."""
+    """One class: a header with its kind and name, and its members when shown."""
 
     def __init__(
         self, cls: Mapping[str, Any], members: Sequence[Member], fonts: Fonts
@@ -131,28 +114,36 @@ class ClassItem(QGraphicsItem):
         self.colours = THEMES["light"]
         self.chosen = False
         self.found = False
+        self.hovered = False
         self.size = self.measure(cls, members, fonts)
+        self.header = self._header_height(cls["kind"], fonts)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAcceptHoverEvents(True)
         # Painted once per zoom level, then only moved: panning stays cheap.
         self.setCacheMode(QGraphicsItem.CacheMode.DeviceCoordinateCache)
+
+    @staticmethod
+    def _header_height(kind: str, fonts: Fonts) -> float:
+        height = QFontMetricsF(fonts.name).height() + 2 * _PAD_Y
+        if kind != "class":
+            height += QFontMetricsF(fonts.kind).height()
+        return height
 
     @staticmethod
     def measure(
         cls: Mapping[str, Any], members: Sequence[Member], fonts: Fonts
     ) -> tuple[float, float]:
         """The box's size, in points: what Graphviz is told, and what is drawn."""
-        name = QFontMetricsF(fonts.name)
-        kind = QFontMetricsF(fonts.kind)
-        member = QFontMetricsF(fonts.member)
-        width = name.horizontalAdvance(cls["name"])
-        height = name.height()
+        wide = width(cls["name"], fonts.name)
         if cls["kind"] != "class":
-            width = max(width, kind.horizontalAdvance(f"«{cls['kind']}»"))
-            height += kind.height()
+            wide = max(wide, width(cls["kind"].upper(), fonts.kind) + 8)
+        height = ClassItem._header_height(cls["kind"], fonts)
         if members:
-            width = max(width, *(member.horizontalAdvance(m.text) for m in members))
-            height += _GAP + len(members) * member.height()
-        return max(width + 2 * _PAD_X, 72), height + 2 * _PAD_Y
+            wide = max(wide, *(width(m.text, fonts.member) for m in members))
+            height += (
+                2 * _MEMBERS_PAD + len(members) * QFontMetricsF(fonts.member).height()
+            )
+        return max(wide + 2 * _PAD_X, 84), height
 
     def set_colours(self, colours: dict[str, str]) -> None:
         self.colours = colours
@@ -162,11 +153,19 @@ class ClassItem(QGraphicsItem):
         if (chosen, found) != (self.chosen, self.found):
             self.chosen, self.found = chosen, found
             self.update()
-        self.setOpacity(0.35 if dimmed else 1.0)
+        self.setOpacity(0.3 if dimmed else 1.0)
+
+    def hoverEnterEvent(self, event: QGraphicsSceneHoverEvent) -> None:  # noqa: N802 (Qt's name)
+        self.hovered = True
+        self.update()
+
+    def hoverLeaveEvent(self, event: QGraphicsSceneHoverEvent) -> None:  # noqa: N802 (Qt's name)
+        self.hovered = False
+        self.update()
 
     def boundingRect(self) -> QRectF:  # noqa: N802 (Qt's name)
         w, h = self.size
-        return QRectF(-2, -2, w + 4, h + 4)
+        return QRectF(-4, -4, w + 8, h + 4 + _SHADOW + 2)
 
     def paint(
         self,
@@ -176,52 +175,73 @@ class ClassItem(QGraphicsItem):
     ) -> None:
         c = self.colours
         w, h = self.size
-        fill = c["panel"]
-        if self.kind in _KIND_FILL:
-            colour, share = _KIND_FILL[self.kind]
-            painter.setBrush(mix(c[colour], share, c["panel"]))
-        else:
-            painter.setBrush(QColor(fill))
-        if self.chosen:
-            pen = QPen(QColor(c["focus"]), 3)
-        elif self.found:
-            pen = QPen(QColor(c["accent"]), 3)
-        else:
-            pen = QPen(QColor(c["ink-2"]), 1)
-        painter.setPen(pen)
-        painter.drawRect(QRectF(0, 0, w, h))
+        dark = is_dark(c)
+        box = QRectF(0, 0, w, h)
+        tint = kind_colour(c, self.kind)
 
-        ink = QColor(c["ink"])
+        # A soft shadow: two faint layers under the box, cheaper than a blur.
+        painter.setPen(Qt.PenStyle.NoPen)
+        for spread, alpha in ((_SHADOW, 0.05), (_SHADOW / 2, 0.07)):
+            shade = QColor(c["shadow"])
+            shade.setAlphaF(alpha * (3 if dark else 1))
+            painter.setBrush(shade)
+            painter.drawRoundedRect(box.translated(0, spread), _RADIUS, _RADIUS)
+
+        painter.setBrush(QColor(c["panel"]))
+        painter.drawRoundedRect(box, _RADIUS, _RADIUS)
+
+        # The header, in the colour of the kind; the body stays plain.
+        header = QPainterPath()
+        top = QRectF(0, 0, w, self.header)
+        header.addRoundedRect(top, _RADIUS, _RADIUS)
+        if self.members:
+            square = QPainterPath()
+            square.addRect(QRectF(0, self.header / 2, w, self.header / 2))
+            header = header.united(square)
+        painter.setBrush(mix(tint, 0.22 if dark else 0.12, c["panel"]))
+        painter.drawPath(header)
+
+        if self.chosen:
+            border = QPen(QColor(c["focus"]), 2.5)
+        elif self.found:
+            border = QPen(QColor(c["accent"]), 2.2)
+        elif self.hovered:
+            border = QPen(QColor(c["accent"]), 1.5)
+        else:
+            border = QPen(mix(tint, 0.45 if dark else 0.35, c["line"]), 1.1)
+        painter.setPen(border)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(box, _RADIUS, _RADIUS)
+
         y = _PAD_Y
         if self.kind != "class":
             kind = QFontMetricsF(self.fonts.kind)
             painter.setFont(self.fonts.kind)
-            painter.setPen(QColor(c["ink-2"]))
+            painter.setPen(QColor(tint))
             painter.drawText(
-                QRectF(0, y, w, kind.height()),
-                Qt.AlignmentFlag.AlignCenter,
-                f"«{self.kind}»",
+                QRectF(0, y, w, kind.height()), Qt.AlignmentFlag.AlignCenter, self.kind
             )
             y += kind.height()
         name = QFontMetricsF(self.fonts.name)
         painter.setFont(self.fonts.name)
-        painter.setPen(ink)
+        painter.setPen(QColor(c["ink"]))
         painter.drawText(
             QRectF(0, y, w, name.height()), Qt.AlignmentFlag.AlignCenter, self.name
         )
-        y += name.height()
         if not self.members:
             return
-        y += _GAP / 2
-        painter.setPen(QPen(QColor(c["ink-2"]), 1))
+
+        y = self.header
+        painter.setPen(QPen(mix(tint, 0.3, c["line"]), 1))
         painter.drawLine(QPointF(0, y), QPointF(w, y))
-        y += _GAP / 2
+        y += _MEMBERS_PAD
         member = QFontMetricsF(self.fonts.member)
-        painter.setPen(ink)
         for line in self.members:
             font = QFont(self.fonts.member)
             font.setUnderline(line.static)
             painter.setFont(font)
+            private = line.text.startswith("-")
+            painter.setPen(QColor(c["ink-3" if private else "ink-2"]))
             painter.drawText(
                 QRectF(_PAD_X, y, w - _PAD_X, member.height()),
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
@@ -230,51 +250,53 @@ class ClassItem(QGraphicsItem):
             y += member.height()
 
 
-_STYLES = {
-    "inherits": Qt.PenStyle.SolidLine,
-    "implements": Qt.PenStyle.DashLine,
-    "holds": Qt.PenStyle.SolidLine,
-    "uses": Qt.PenStyle.DotLine,
-}
-_ARROW = 11.0  # length of an arrowhead, in points
-
-
 class EdgeItem(QGraphicsItem):
     """One arrow: a triangle at the general end for inherits and implements, else a head."""
 
     def __init__(
         self,
-        kind: str,
+        relation: Mapping[str, Any],
         points: Sequence[tuple[float, float]],
-        label: str,
         label_at: tuple[float, float] | None,
         fonts: Fonts,
     ) -> None:
         super().__init__()
-        self.kind = kind
-        self.label = label
+        self.kind: str = relation["kind"]
+        self.ends = (relation["from"], relation["to"])
+        self.label: str = relation.get("label", "")
         self.fonts = fonts
         self.colours = THEMES["light"]
+        self.lit = False  # one end is the chosen class
         p = [QPointF(x, y) for x, y in points]
         self.path = QPainterPath(p[0])
         for i in range(1, len(p) - 2, 3):
             self.path.cubicTo(p[i], p[i + 1], p[i + 2])
         # The general end is the first point: the triangle goes there.
-        if kind in ("inherits", "implements"):
+        if self.kind in ("inherits", "implements"):
             self.tip, self.back = p[0], p[1]
         else:
             self.tip, self.back = p[-1], p[-2]
         self.label_rect: QRectF | None = None
-        if label and label_at is not None:
-            w, h = text_size(label, fonts.label, pad=2)
+        if self.label and label_at is not None:
+            w, h = text_size(self.label, fonts.label, pad=3)
+            w += 6
             self.label_rect = QRectF(label_at[0] - w / 2, label_at[1] - h / 2, w, h)
-        bounds = self.path.boundingRect().adjusted(-_ARROW, -_ARROW, _ARROW, _ARROW)
+        margin = 12
+        bounds = self.path.boundingRect().adjusted(-margin, -margin, margin, margin)
         self.bounds = bounds.united(self.label_rect) if self.label_rect else bounds
         self.setZValue(-1)  # under the boxes
 
     def set_colours(self, colours: dict[str, str]) -> None:
         self.colours = colours
         self.update()
+
+    def set_state(self, *, lit: bool, faded: bool) -> None:
+        """Lit: an arrow of the chosen class, drawn over the others. Faded: one of the rest."""
+        if lit != self.lit:
+            self.lit = lit
+            self.setZValue(-0.5 if lit else -1)
+            self.update()
+        self.setOpacity(0.18 if faded else 1.0)
 
     def boundingRect(self) -> QRectF:  # noqa: N802 (Qt's name)
         return self.bounds
@@ -286,35 +308,31 @@ class EdgeItem(QGraphicsItem):
         widget: QWidget | None = None,
     ) -> None:
         c = self.colours
-        line = QColor(c["ink-2"])
-        pen = QPen(line, 1.3, _STYLES[self.kind])
+        if self.lit:
+            line, width = QColor(c["accent"]), 2.0
+        else:
+            line = mix(c["ink-2"], 0.75, c["bg"])
+            width = 1.2
+        pen = QPen(line, width, LINE_STYLE[self.kind])
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawPath(self.path)
-
-        dx, dy = self.tip.x() - self.back.x(), self.tip.y() - self.back.y()
-        length = math.hypot(dx, dy) or 1.0
-        ux, uy = dx / length, dy / length  # along the arrow, towards the tip
-        base = QPointF(self.tip.x() - ux * _ARROW, self.tip.y() - uy * _ARROW)
-        side = QPointF(-uy * _ARROW * 0.5, ux * _ARROW * 0.5)
-        painter.setPen(QPen(line, 1.3))
-        if self.kind in ("inherits", "implements"):
-            painter.setBrush(QColor(c["bg"]))  # hollow: the background shows through
-            painter.drawPolygon(QPolygonF([self.tip, base + side, base - side]))
-        else:
-            painter.drawPolyline(QPolygonF([base + side, self.tip, base - side]))
+        painter.setPen(QPen(line, width))
+        draw_head(painter, self.kind, self.tip, self.back, line, QColor(c["panel"]))
 
         if self.label_rect is not None:
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(QColor(c["bg"])))
-            painter.drawRect(self.label_rect)
+            painter.setPen(QPen(QColor(c["accent"] if self.lit else c["line"]), 1))
+            painter.setBrush(QColor(c["panel"]))
+            radius = self.label_rect.height() / 2
+            painter.drawRoundedRect(self.label_rect, radius, radius)
             painter.setFont(self.fonts.label)
-            painter.setPen(QColor(c["ink-2"]))
+            painter.setPen(QColor(c["accent"] if self.lit else c["ink-2"]))
             painter.drawText(self.label_rect, Qt.AlignmentFlag.AlignCenter, self.label)
 
 
 class AreaItem(QGraphicsItem):
-    """One area (a package): a frame around its classes, with its name."""
+    """One area (a package): a soft frame around its classes, with its name."""
 
     def __init__(self, title: str, rect: QRectF, fonts: Fonts) -> None:
         super().__init__()
@@ -339,14 +357,14 @@ class AreaItem(QGraphicsItem):
         widget: QWidget | None = None,
     ) -> None:
         c = self.colours
-        painter.setPen(QPen(QColor(c["line"]), 1))
-        painter.setBrush(QColor(c["panel-2"]))
-        painter.drawRoundedRect(self.rect, 6, 6)
+        painter.setPen(QPen(QColor(c["line-2"]), 1))
+        painter.setBrush(mix(c["panel-2"], 0.55, c["bg"]))
+        painter.drawRoundedRect(self.rect, 12, 12)
         painter.setFont(self.fonts.title)
-        painter.setPen(QColor(c["ink-2"]))
+        painter.setPen(QColor(c["ink-3"]))
         top = QFontMetricsF(self.fonts.title).height()
         painter.drawText(
-            QRectF(self.rect.x() + 8, self.rect.y() + 4, self.rect.width() - 16, top),
+            QRectF(self.rect.x() + 12, self.rect.y() + 7, self.rect.width() - 24, top),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             self.title,
         )

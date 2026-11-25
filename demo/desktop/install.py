@@ -31,9 +31,12 @@ APP_FILES = (
     "__init__.py",
     "__main__.py",
     "diagram.py",
-    "items.py",
-    "window.py",
     "extract.py",
+    "items.py",
+    "style.py",
+    "widgets.py",
+    "window.py",
+    "work.py",
 )
 
 
