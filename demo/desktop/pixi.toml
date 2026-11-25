@@ -1,0 +1,14 @@
+# The class diagram as a desktop app (demo/desktop/README.md): its own environment, so it
+# runs whichever branch the checkout is on. `python -m demo.desktop.install` installs it.
+[workspace]
+name = "intercede-classes"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+# the same release-age cooldown as the repository's own environments
+exclude-newer = "7d"
+
+[dependencies]
+python = "3.13.*"
+pyside6 = ">=6.8"
+graphviz = ">=12"
+pytest = "*"

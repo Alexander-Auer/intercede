@@ -116,7 +116,8 @@ def model() -> dict[str, Any]:
                 "label": ", ".join(names),
             }
         )
-    for cls, target in used:
+    # A set has no order of its own: sorted, the same code gives the same model each time.
+    for cls, target in sorted(used, key=lambda pair: (ids[pair[0]], ids[pair[1]])):
         if (cls, target) not in held:
             relations.append({"kind": "uses", "from": ids[cls], "to": ids[target]})
     relations += [
@@ -357,10 +358,17 @@ def _signature(name: str, parameters: list[inspect.Parameter], returns: Any) -> 
         if p.annotation is not p.empty:
             text += f": {p.annotation}"
         if p.default is not p.empty:
-            text += f" = {p.default!r}"
+            text += f" = {_default(p.default)}"
         written.append(text)
     arrow = "" if returns is inspect.Signature.empty else f" -> {returns}"
     return f"{name}({', '.join(written)}){arrow}"
+
+
+def _default(value: Any) -> str:
+    """A default as the source writes it: a function or class by its name, not its address."""
+    if inspect.isfunction(value) or inspect.isclass(value):
+        return value.__name__
+    return repr(value)
 
 
 def _implements(classes: list[type]) -> list[tuple[type, type]]:

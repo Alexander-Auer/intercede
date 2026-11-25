@@ -49,8 +49,9 @@ def test_no_backend_is_named_in_the_demo():
         path
         for suffix in ("*.py", "*.js", "*.html", "*.css")
         for path in DEMO.rglob(suffix)
-        # vendor/: third-party code shipped as it is, not the demo's own
-        if not {"tests", "vendor"} & set(path.relative_to(DEMO).parts)
+        # vendor/: third-party code shipped as it is, not the demo's own; .pixi: an
+        # environment (the desktop app's)
+        if not {"tests", "vendor", ".pixi"} & set(path.relative_to(DEMO).parts)
     ]
     named = [
         f"{path.relative_to(DEMO)}:{number}: {line.strip()}"

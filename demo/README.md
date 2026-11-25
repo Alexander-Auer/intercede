@@ -88,6 +88,9 @@ written by hand, so a class added to the library is on it at the next start.
 - **Mermaid:** *Copy*, *Download .mmd* and *View* give the Mermaid text of what is drawn, to paste
   into a document or a GitHub comment.
 
+The same diagram is also a desktop app, quicker and read again whenever the code changes: see
+[desktop/README.md](desktop/README.md).
+
 ## Recording and replay
 
 **Record** saves every event the browser sees, from a full snapshot on, until you press it again,
@@ -207,6 +210,7 @@ target, without the demo knowing it. The library's own suite does not collect th
 | `board.py`, `payloads.py`, `scenarios.py` | the board, its payloads, the scripted scenes |
 | `views.py`, `dryrun.py` | the views read from the code, and the dry run |
 | `classes.py` | the class diagram's model: classes, inheritance, protocols, fields, read from the package |
+| `desktop/` | the class diagram as a desktop app (Qt and Graphviz), installed with `desktop/install.py` |
 | `recording.py`, `recordings/` | record and replay, and the committed live run |
 | `scripts/fetch_ci.py`, `data/ci.json` | reading the CI runs from GitHub, and the last result |
 | `static/` | the browser side: plain ES modules, SVG and CSS, no build step |
