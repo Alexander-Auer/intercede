@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from intercede._backends._htcondor import status
-from intercede._backends.common import ACTIVE
+from intercede._backends.common import ACTIVE, in_parallel
 from intercede._backends.credentials import READ_SCOPES
 from intercede._backends.monolith.htcondorce import collect
 from intercede._backends.monolith.htcondorce.jobs import Jobs
@@ -76,14 +76,12 @@ class OutputCollector:
                 ready.append((handle, ad))
 
         if ready:
-            limit = asyncio.Semaphore(PARALLEL_TRANSFERS)
             async with jobs.session(READ_SCOPES) as session:
-
-                async def fetch(handle: JobHandle, ad: Mapping[str, Any]) -> None:
-                    async with limit:
-                        results[handle] = await self._collect(session, handle, ad, dest)
-
-                await asyncio.gather(*(fetch(handle, ad) for handle, ad in ready))
+                collected = await in_parallel(
+                    (self._collect(session, handle, ad, dest) for handle, ad in ready),
+                    PARALLEL_TRANSFERS,
+                )
+            results.update(zip([handle for handle, _ in ready], collected))
         return {handle: results[handle] for handle in handles}  # in the caller's order
 
     async def _collect(

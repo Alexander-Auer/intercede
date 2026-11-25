@@ -19,7 +19,7 @@ from pydantic import ValidationError
 from intercede._backends.batch import collect, layout, staging
 from intercede._backends.batch.jobs import Jobs
 from intercede._backends.batch.protocols import Transport
-from intercede._backends.common import ACTIVE
+from intercede._backends.common import ACTIVE, in_parallel
 from intercede.config import BatchLocalConfig, BatchSSHConfig
 from intercede.exceptions import ResourceUnavailableError
 from intercede.models import JobHandle, JobOutput, OpOutcome
@@ -56,13 +56,10 @@ class OutputCollector:
             else:
                 ready[handle] = None
 
-        limit = asyncio.Semaphore(PARALLEL_TRANSFERS)
-
-        async def fetch(handle: JobHandle) -> None:
-            async with limit:
-                results[handle] = await self._collect(handle, dest)
-
-        await asyncio.gather(*(fetch(handle) for handle in ready))
+        collected = await in_parallel(
+            (self._collect(handle, dest) for handle in ready), PARALLEL_TRANSFERS
+        )
+        results.update(zip(ready, collected))
         return {handle: results[handle] for handle in handles}  # in the caller's order
 
     async def _collect(self, handle: JobHandle, dest: Path) -> OpOutcome[JobOutput]:

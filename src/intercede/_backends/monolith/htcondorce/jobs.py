@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from intercede._backends._htcondor import status
+from intercede._backends.common import owned_ids, statuses
 from intercede._backends.credentials import (
     READ_SCOPES,
     CredentialCache,
@@ -27,7 +28,7 @@ from intercede._backends.monolith.htcondorce.session import (
 )
 from intercede.auth.models import BearerToken
 from intercede.config import HTCondorCEConfig
-from intercede.models import JobHandle, JobID, JobStatus, StatusMap
+from intercede.models import JobHandle, JobID, StatusMap
 
 BACKEND = "htcondor-ce"
 DEFAULT_PORT = 9619
@@ -69,17 +70,13 @@ class Jobs:
         Ids come from stored handles, so they are checked before they reach a
         command line: a malformed one could otherwise pass as an option.
         """
-        return list(dict.fromkeys(handle.id for handle in handles if self.owns(handle)))
+        return owned_ids(handles, self.owns)
 
     async def status(self, handles: Sequence[JobHandle]) -> StatusMap:
         """Return the status of each job, in the caller's order."""
         ads = await self.ads(self.ids(handles), status.STATE_ATTRIBUTES, history=True)
-        return {
-            handle: status.job_status(ads[handle.id])
-            if self.owns(handle) and handle.id in ads
-            else JobStatus.UNKNOWN
-            for handle in handles
-        }
+        states = {job: status.job_status(ad) for job, ad in ads.items()}
+        return statuses(handles, self.owns, states)
 
     async def ads(
         self, ids: Sequence[JobID], attributes: Sequence[str], *, history: bool

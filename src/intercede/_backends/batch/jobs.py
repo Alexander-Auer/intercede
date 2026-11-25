@@ -20,6 +20,7 @@ from intercede._backends.batch.protocols import (
     SchedulerStatusMap,
     Transport,
 )
+from intercede._backends.common import owned_ids, statuses
 from intercede.config import BatchLocalConfig, BatchSSHConfig
 from intercede.exceptions import ResourceUnavailableError
 from intercede.models import JobHandle, JobID, JobStatus, StatusMap
@@ -66,17 +67,12 @@ class Jobs:
 
     def ids(self, handles: Iterable[JobHandle]) -> list[JobID]:
         """Return the IDs to ask the scheduler about: ours, each once."""
-        return list(dict.fromkeys(handle.id for handle in handles if self.owns(handle)))
+        return owned_ids(handles, self.owns)
 
     async def status(self, handles: Sequence[JobHandle]) -> StatusMap:
         """Return the status of each job, in the caller's order."""
         states = await self.states(self.ids(handles))
-        return {
-            handle: states.get(handle.id, JobStatus.UNKNOWN)
-            if self.owns(handle)
-            else JobStatus.UNKNOWN
-            for handle in handles
-        }
+        return statuses(handles, self.owns, states)
 
     async def states(self, ids: Sequence[JobID]) -> dict[JobID, JobStatus]:
         """Ask the queue about jobs, and the history about those it does not know."""
