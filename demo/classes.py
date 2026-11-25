@@ -12,7 +12,7 @@ What the page draws comes from the code alone:
   protocol is drawn: a class that is a ``JobBackend`` is not drawn again as each
   protocol ``JobBackend`` is made of.
 - **Holds:** a field, or an attribute ``__init__`` sets, whose annotation names
-  another interCEde class.
+  another interCEde class, or that ``__init__`` builds from one (``self.x = C(...)``).
 - **Uses:** a method parameter or return value that names one.
 """
 
@@ -26,6 +26,7 @@ import importlib
 import inspect
 import pkgutil
 import re
+import sys
 import textwrap
 import typing
 from pathlib import Path
@@ -247,7 +248,7 @@ def _fields(cls: type) -> list[dict[str, Any]]:
 
 
 def _set_by_init(cls: type) -> dict[str, str]:
-    """The attributes ``__init__`` sets on ``self``, with their annotation or the parameter's."""
+    """The attributes ``__init__`` sets on ``self``, with the type the code gives them."""
     try:
         tree = ast.parse(textwrap.dedent(inspect.getsource(cls.__init__)))  # type: ignore[misc]
     except (OSError, TypeError, SyntaxError):
@@ -265,10 +266,7 @@ def _set_by_init(cls: type) -> dict[str, str]:
         if isinstance(node, ast.AnnAssign):
             targets, annotation = [node.target], ast.unparse(node.annotation)
         elif isinstance(node, ast.Assign):
-            value = node.value
-            annotation = (
-                parameters.get(value.id, "") if isinstance(value, ast.Name) else ""
-            )
+            annotation = _type_of(node.value, parameters, sys.modules[cls.__module__])
             targets = node.targets
         else:
             continue
@@ -281,6 +279,24 @@ def _set_by_init(cls: type) -> dict[str, str]:
                 if annotation or target.attr not in found:
                     found[target.attr] = annotation
     return found
+
+
+def _type_of(value: ast.expr, parameters: dict[str, str], module: ModuleType) -> str:
+    """The type of an assigned value, where the code states it, or ``""``.
+
+    That is a parameter's annotation, or the class whose constructor is called:
+    only a name that is a class in ``module``, never a function's result.
+    """
+    if isinstance(value, ast.Name):
+        return parameters.get(value.id, "")
+    if isinstance(value, ast.Call):
+        callee = ast.unparse(value.func)
+        target: Any = module
+        for part in callee.split("."):
+            target = getattr(target, part, None)
+        if inspect.isclass(target):
+            return callee
+    return ""
 
 
 def _methods(cls: type) -> list[dict[str, Any]]:

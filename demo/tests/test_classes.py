@@ -9,6 +9,7 @@ import pytest
 import intercede
 from demo import classes
 from intercede import models, registry
+from intercede.models import SubmissionSpec
 
 
 @pytest.fixture(scope="module")
@@ -95,6 +96,23 @@ def test_a_class_added_to_the_package_appears_without_a_demo_change(monkeypatch)
     drawn = classes.model.__wrapped__()
     assert "AddedLater" in _named(drawn)
     assert ("AddedLater", "JobHandle") in _pairs(drawn, "inherits")
+
+
+class _Built:
+    """Builds what it holds, as a backend builds the parts of its capabilities."""
+
+    def __init__(self) -> None:
+        self.spec = SubmissionSpec(executable="/bin/true")
+        self.name = str("x")  # a call, but not of a class in the module
+
+
+def test_an_attribute_built_in_init_is_held(monkeypatch):
+    monkeypatch.setattr(_Built, "__module__", models.__name__)
+    monkeypatch.setattr(models, "_Built", _Built, raising=False)
+    drawn = classes.model.__wrapped__()
+    assert ("_Built", "SubmissionSpec") in _pairs(drawn, "holds")
+    fields = {f["name"]: f["type"] for f in _named(drawn)["_Built"]["fields"]}
+    assert fields["name"] == ""
 
 
 def test_source_is_served_only_for_a_drawn_class(diagram):
