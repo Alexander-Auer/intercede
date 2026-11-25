@@ -88,8 +88,8 @@ written by hand, so a class added to the library is on it at the next start.
 - **Mermaid:** *Copy*, *Download .mmd* and *View* give the Mermaid text of what is drawn, to paste
   into a document or a GitHub comment.
 
-The same diagram is also a desktop app, quicker and read again whenever the code changes: see
-[desktop/README.md](desktop/README.md).
+The same diagram is also a desktop app, quicker and read again whenever the code changes, which
+can also trace one call through the code and back: see [desktop/README.md](desktop/README.md).
 
 ## Recording and replay
 

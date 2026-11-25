@@ -6,6 +6,7 @@ Nothing here draws or imports Qt, so it is tested on its own. The model is the o
 
 from __future__ import annotations
 
+import ast
 import json
 import math
 import re
@@ -35,8 +36,15 @@ class Settings:
 # -- what is drawn ------------------------------------------------------------------
 
 
-def shown_classes(model: Model, settings: Settings, focus: str | None) -> list[Class]:
-    """The classes to draw: a focused class and its neighbours, or what the filters let through."""
+def shown_classes(
+    model: Model,
+    settings: Settings,
+    focus: str | None,
+    only: set[str] | None = None,
+) -> list[Class]:
+    """The classes to draw: ``only`` those, a class and its neighbours, or what the filters let through."""
+    if only is not None:
+        return [c for c in model["classes"] if c["id"] in only]
     if focus:
         near = {focus}
         for r in model["relations"]:
@@ -114,7 +122,13 @@ _ENTITIES = {
     "<": "#60;",
     ">": "#62;",
 }
-_ARROWS = {"inherits": "<|--", "implements": "<|..", "holds": "-->", "uses": "..>"}
+_ARROWS = {
+    "inherits": "<|--",
+    "implements": "<|..",
+    "holds": "-->",
+    "uses": "..>",
+    "calls": "-->",  # a traced call's path
+}
 
 
 def _mermaid(s: str) -> str:
@@ -306,3 +320,78 @@ def parse_layout(output: str, relations: Sequence[Relation]) -> Layout:
             label_at = point(*(float(v) for v in edge["lp"].split(",")))
         edges.append(Edge(relation, points, label_at))
     return Layout(width, height, nodes, edges, areas)
+
+
+# -- a traced call ----------------------------------------------------------------------------
+
+
+def function_source(text: str, first: int) -> tuple[str, int]:
+    """The function that starts at line ``first`` of a file: its text, and its first line.
+
+    Found with ``ast``, so a signature over several lines, a nested function and the
+    decorators are all where Python sees them.
+    """
+    lines = text.splitlines()
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        tree = None
+    for node in ast.walk(tree) if tree is not None else ():
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
+            start = min(
+                [node.lineno, *(d.lineno for d in getattr(node, "decorator_list", []))]
+            )
+            if start == first and node.end_lineno is not None:
+                return "\n".join(lines[start - 1 : node.end_lineno]), start
+    return "\n".join(lines[first - 1 : first + 30]), first
+
+
+def trace_path(
+    model: Model, nodes: Sequence[Mapping[str, Any]]
+) -> tuple[dict[str, int], list[dict[str, Any]]]:
+    """The classes a traced call went through, and its calls between them.
+
+    Args:
+        model: The diagram's model.
+        nodes: The calls ``trace.py`` recorded.
+
+    Returns:
+        Each class's place on the path (from 1, in the order the call reached it),
+        and one ``calls`` relation per caller and callee, labelled with the methods
+        called. A module function is passed through: its calls are its caller's.
+    """
+    by_name = {(c["module"], c["name"]): c["id"] for c in model["classes"]}
+    of_node: dict[int, str] = {}
+    order: dict[str, int] = {}
+    for node in sorted(nodes, key=lambda n: n["step_in"]):
+        if node["kind"] != "call" or "." not in node["qualname"]:
+            continue
+        cid = by_name.get((node["module"], node["qualname"].split(".")[0]))
+        if cid is None:
+            continue
+        of_node[node["id"]] = cid
+        order.setdefault(cid, len(order) + 1)
+    by_id = {n["id"]: n for n in nodes}
+    called: dict[tuple[str, str], list[str]] = {}
+    for number, cid in of_node.items():
+        parent = by_id[number]["parent"]
+        while parent is not None and parent not in of_node:
+            parent = by_id[parent]["parent"]
+        if parent is not None and of_node[parent] != cid:
+            method = by_id[number]["qualname"].split(".")[1]
+            names = called.setdefault((of_node[parent], cid), [])
+            if method not in names:
+                names.append(method)
+    calls = [
+        {"kind": "calls", "from": a, "to": b, "label": _methods(names)}
+        for (a, b), names in sorted(
+            called.items(), key=lambda p: (order[p[0][0]], order[p[0][1]])
+        )
+    ]
+    return order, calls
+
+
+def _methods(names: list[str]) -> str:
+    """The methods one class called on another, for the arrow between them."""
+    shown = ", ".join(names[:3])
+    return shown + (f" +{len(names) - 3}" if len(names) > 3 else "")

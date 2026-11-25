@@ -33,8 +33,10 @@ APP_FILES = (
     "diagram.py",
     "extract.py",
     "items.py",
+    "journey.py",
     "style.py",
     "widgets.py",
+    "trace.py",
     "window.py",
     "work.py",
 )

@@ -20,7 +20,6 @@ let byId = new Map();
 let focus = null; // a class id: only it and its neighbours are drawn
 let chosen = null; // the class the detail panel shows
 let text = ""; // the Mermaid text of what is drawn
-let drawn = 0; // render counter: Mermaid wants a fresh element id each time
 const view = { x: 0, y: 0, k: 1 };
 
 // -- theme, as the talk's shell keeps it --------------------------------------
@@ -120,8 +119,10 @@ function css(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
+let look = ""; // Mermaid's settings, colours included: part of a kept drawing's key
+
 function setUpMermaid() {
-  mermaid.initialize({
+  const config = {
     startOnLoad: false,
     securityLevel: "strict",
     theme: "base",
@@ -145,7 +146,63 @@ function setUpMermaid() {
       edgeLabelBackground: css("--bg"),
     },
     class: { hideEmptyMembersBox: true },
-  });
+  };
+  look = JSON.stringify(config);
+  mermaid.initialize(config);
+}
+
+// -- drawings, kept ---------------------------------------------------------------
+// Mermaid lays a diagram out in one block of one to three seconds, in which the page cannot
+// respond. The same text always gives the same drawing, so each one is kept: in memory for this
+// visit, and the last few in localStorage, so a reload or a view seen before shows at once. The
+// key is the text and Mermaid's settings, so a change to the code (a different text) or to the
+// theme never gets an old drawing.
+
+const KEPT = 4; // drawings kept across reloads; one is about 300 KB
+const drawings = new Map(); // key -> svg
+
+// A 53-bit hash of the text (cyrb53), with its length: a key short enough to store.
+function keyOf(s) {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return `${(4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)}-${s.length}`;
+}
+
+function stored() {
+  try { return JSON.parse(localStorage.getItem("classes-drawings") ?? "[]"); } catch { return []; }
+}
+
+function keep(key, svg) {
+  drawings.set(key, svg);
+  const kept = [[key, svg], ...stored().filter(([k]) => k !== key)];
+  for (let n = Math.min(kept.length, KEPT); n > 0; n--) {
+    try {
+      localStorage.setItem("classes-drawings", JSON.stringify(kept.slice(0, n)));
+      return;
+    } catch { /* full, or a private window: keep fewer */ }
+  }
+}
+
+async function drawingOf(text) {
+  const key = keyOf(`${look}\n${text}`);
+  const known = drawings.get(key) ?? stored().find(([k]) => k === key)?.[1];
+  if (known) {
+    drawings.set(key, known);
+    return known;
+  }
+  // Let the browser show "Drawing…" before Mermaid takes the page.
+  await new Promise((done) => requestAnimationFrame(() => setTimeout(done)));
+  // The id is the key: a drawing kept from an earlier visit cannot share it with a new one.
+  const { svg } = await mermaid.render(`diagram-${key}`, text);
+  keep(key, svg);
+  return svg;
 }
 
 async function render({ fit = false } = {}) {
@@ -161,8 +218,7 @@ async function render({ fit = false } = {}) {
   }
   $("status").textContent = "Drawing…";
   try {
-    const { svg } = await mermaid.render(`diagram-${++drawn}`, text);
-    drawing.innerHTML = svg;
+    drawing.innerHTML = await drawingOf(text);
   } catch (error) {
     $("status").textContent = `Mermaid could not draw this: ${error.message ?? error}`;
     console.error(error, text);
@@ -213,6 +269,21 @@ function apply() {
   $("drawing").style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.k})`;
 }
 
+// Dragging and the wheel move the drawing at most once a frame, as a layer of its own while it
+// moves; when it stops, the layer goes, so the text is drawn sharp again at the new scale.
+let moving = null;
+let settle = null;
+function applySoon() {
+  if (moving) return;
+  $("drawing").style.willChange = "transform";
+  moving = requestAnimationFrame(() => {
+    moving = null;
+    apply();
+  });
+  clearTimeout(settle);
+  settle = setTimeout(() => { $("drawing").style.willChange = ""; }, 200);
+}
+
 function size() {
   const svg = $("drawing").querySelector("svg");
   if (!svg) return null;
@@ -232,12 +303,12 @@ function fitView() {
   apply();
 }
 
-function zoomAt(factor, cx, cy) {
+function zoomAt(factor, cx, cy, { soon = false } = {}) {
   const k = Math.min(Math.max(view.k * factor, 0.05), 4);
   view.x = cx - ((cx - view.x) * k) / view.k;
   view.y = cy - ((cy - view.y) * k) / view.k;
   view.k = k;
-  apply();
+  if (soon) applySoon(); else apply();
 }
 
 function centreOn(id) {
@@ -270,7 +341,7 @@ function setUpCanvas() {
     if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
     view.x = drag.vx + dx;
     view.y = drag.vy + dy;
-    apply();
+    applySoon();
   });
   canvas.addEventListener("pointerup", (e) => {
     const wasDrag = drag?.moved;
@@ -284,7 +355,7 @@ function setUpCanvas() {
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
     const box = canvas.getBoundingClientRect();
-    zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX - box.left, e.clientY - box.top);
+    zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX - box.left, e.clientY - box.top, { soon: true });
   }, { passive: false });
   const middle = () => {
     const box = canvas.getBoundingClientRect();

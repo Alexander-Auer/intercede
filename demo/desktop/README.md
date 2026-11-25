@@ -41,6 +41,34 @@ New:
 - A chosen class's arrows are drawn in blue and the others fade, so what it touches stands
   out. The source view has line numbers.
 
+## Trace a call
+
+**Trace a call** (the switch at the top of the side bar) shows how one call travels through the
+code: from the backend's method, through every layer, out of the process as a command or a
+request, and back with its answer to the value the call returns.
+
+1. Choose where: **the fake backend** (in memory, nothing to start), or **an integration stack**
+   (`tests/integration/stacks.yml`), built as the integration suite builds it. A stack must be
+   running (`●`); if it is not, the side bar says how to start it. A stack the suite reaches only
+   from inside its container is not offered.
+2. Choose the operation, then **Trace**. An operation that needs a job first gets one, as the
+   suite does: a job is submitted and waited for until it runs or has ended. Afterwards the jobs
+   are purged.
+3. Follow it:
+   - **the calls**, as a tree: what each returned or raised, how long it took, and, marked, each
+     command, request or file copy that left the process, with its answer;
+   - **the code** of the selected call, at the line the run is at, with the lines where it makes
+     its calls marked; its arguments, its return value, who called it and what it called;
+   - **step by step**: → and ← go into each call and out of it again, as a debugger would have
+     gone; Shift+→ steps over a call. Clicking a call in the tree goes to it.
+4. **Show in diagram** draws the classes the call went through, numbered in the order it reached
+   them, with an arrow for each class calling another, labelled with the methods it called.
+
+It names no backend: the targets come from the registry and the stacks, and what leaves the
+process is recorded where it leaves (a program started, `httpx`, `asyncssh`), whichever backend
+sends it. Every function of `intercede` that runs is recorded with Python's `sys.monitoring`, in
+the checkout's own Python (`trace.py`). The trace is recorded again when the code changes.
+
 ## Why it is quick
 
 | | web page | app |
@@ -64,6 +92,8 @@ Measured on the development laptop, with the 84 classes of the package.
 
 | file | what |
 | --- | --- |
+| `trace.py` | run by the checkout's own Python: records one call on the fake or a stack, as JSON |
+| `journey.py` | the Trace page: the call tree, the code, stepping, the path on the diagram |
 | `extract.py` | run by the checkout's own Python (`.pixi/envs/py313`): prints the model of `demo/classes.py`, and each class's source, as JSON |
 | `diagram.py` | what is drawn, the Mermaid text, the Graphviz input and reading its layout; no Qt, tested on its own |
 | `items.py` | the boxes, arrows and areas as Qt items |

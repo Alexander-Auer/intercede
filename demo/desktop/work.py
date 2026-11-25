@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +66,26 @@ def branch(repo: Path) -> str:
     )
 
 
+def checkout_environment(python: list[str]) -> QProcessEnvironment:
+    """The environment the checkout's Python runs in, as ``pixi run`` would give it.
+
+    Its ``bin`` folder comes first on ``PATH``: the tools a backend runs (installed
+    in that environment) are found as they are under ``pixi run``. The app's own
+    ``PYTHONPATH`` and ``PYTHONHOME`` are not passed on.
+    """
+    environment = QProcessEnvironment.systemEnvironment()
+    for name in ("PYTHONPATH", "PYTHONHOME"):
+        environment.remove(name)
+    folder = Path(python[0]).parent
+    if folder.name == "bin" and (folder / "python").exists():
+        path = environment.value("PATH", "")
+        environment.insert(
+            "PATH", f"{folder}{os.pathsep}{path}" if path else str(folder)
+        )
+        environment.insert("CONDA_PREFIX", str(folder.parent))
+    return environment
+
+
 def cache_dir() -> Path:
     base = QStandardPaths.writableLocation(
         QStandardPaths.StandardLocation.CacheLocation
@@ -95,10 +116,7 @@ class Reader(QObject):
             self.again = True
             return
         process = QProcess(self)
-        environment = QProcessEnvironment.systemEnvironment()
-        for name in ("PYTHONPATH", "PYTHONHOME"):  # the app's, not the checkout's
-            environment.remove(name)
-        process.setProcessEnvironment(environment)
+        process.setProcessEnvironment(checkout_environment(self.python))
         process.setWorkingDirectory(str(self.repo))
         process.finished.connect(lambda *_: self._done(process))
         self.process = process
@@ -205,3 +223,67 @@ class Layouter(QObject):
         except OSError:
             pass  # kept for this run only
         self.done.emit(number, d.parse_layout(out, relations))
+
+
+class Tracer(QObject):
+    """Records calls with the checkout's Python (``trace.py``), one at a time."""
+
+    listed = Signal(list)  # the backends there are, each with its operations
+    traced = Signal(dict)  # one call, recorded
+    failed = Signal(str)
+    progress = Signal(str)  # what it is doing: waiting for a job, recording
+
+    def __init__(self, repo: Path, python: list[str]) -> None:
+        super().__init__()
+        self.repo = repo
+        self.python = python
+        self.process: QProcess | None = None
+
+    def list(self) -> None:
+        self._start(["--list"], lambda data: self.listed.emit(data["backends"]))
+
+    def run(self, backend: str, operation: str) -> None:
+        self._start([backend, operation], self.traced.emit)
+
+    def stop(self) -> None:
+        if self.process is not None:
+            self.process.finished.disconnect()
+            self.process.kill()
+            self.process.waitForFinished(1000)
+            self.process.deleteLater()
+            self.process = None
+
+    def _start(self, args: list[str], done: Any) -> None:
+        self.stop()  # a newer request replaces one still running
+        process = QProcess(self)
+        process.setProcessEnvironment(checkout_environment(self.python))
+        process.setWorkingDirectory(str(self.repo))
+        process.finished.connect(lambda *_: self._done(process, done))
+        process.readyReadStandardError.connect(lambda: self._said(process))
+        self.process = process
+        command = [*self.python, str(HERE / "trace.py"), *args]
+        process.start(command[0], command[1:])
+
+    def _said(self, process: QProcess) -> None:
+        text = bytes(process.readAllStandardError().data()).decode(errors="replace")
+        lines = [line for line in text.splitlines() if line.strip()]
+        if lines:
+            self.progress.emit(lines[-1])
+            self.last_said = lines[-1]
+
+    def _done(self, process: QProcess, done: Any) -> None:
+        if self.process is process:
+            self.process = None
+        out = bytes(process.readAllStandardOutput().data())
+        process.deleteLater()
+        try:
+            data = json.loads(out)
+        except json.JSONDecodeError:
+            self.failed.emit(
+                getattr(self, "last_said", "") or "the trace could not be run"
+            )
+            return
+        if "error" in data and "nodes" not in data:
+            self.failed.emit(str(data["error"]).strip().splitlines()[-1])
+            return
+        done(data)

@@ -17,6 +17,8 @@ from PySide6.QtGui import (
     QResizeEvent,
     QSyntaxHighlighter,
     QTextCharFormat,
+    QTextCursor,
+    QTextFormat,
     QTransform,
     QWheelEvent,
 )
@@ -31,6 +33,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QSizePolicy,
     QStackedWidget,
+    QTextEdit,
     QToolButton,
     QWidget,
 )
@@ -57,7 +60,8 @@ def tool(icon_name: str, tip: str, act: Callable[[], Any]) -> QToolButton:
     button.setToolTip(tip)
     button.setCursor(Qt.CursorShape.PointingHandCursor)
     button.setIconSize(QSize(18, 18))
-    button.clicked.connect(act)
+    # Called without arguments: Qt would pass ``checked`` into a default argument.
+    button.clicked.connect(lambda _checked=False: act())
     return button
 
 
@@ -350,6 +354,31 @@ class CodeView(QPlainTextEdit):
         self.updateRequest.connect(self._scrolled)
         self._margin()
 
+    def set_code(self, text: str, first: int) -> None:
+        """Show other code, numbered from ``first``."""
+        self.first = first
+        self.setPlainText(text)
+        self._margin()
+
+    def mark(self, lines: Mapping[int, str], centre: int | None = None) -> None:
+        """Colour whole lines, by their number in the file; scroll to ``centre``."""
+        marks = []
+        for number, colour in lines.items():
+            block = self.document().findBlockByNumber(number - self.first)
+            if not block.isValid():
+                continue
+            selection = QTextEdit.ExtraSelection()
+            selection.format.setBackground(QColor(colour))
+            selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
+            selection.cursor = QTextCursor(block)
+            marks.append(selection)
+        self.setExtraSelections(marks)
+        if centre is not None:
+            block = self.document().findBlockByNumber(centre - self.first)
+            if block.isValid():
+                self.setTextCursor(QTextCursor(block))
+                self.centerCursor()
+
     def gutter_width(self) -> int:
         digits = len(str(self.first + max(1, self.blockCount())))
         return 18 + self.fontMetrics().horizontalAdvance("9") * digits
@@ -425,7 +454,7 @@ class AreaRow(QWidget):
         self.only.setObjectName("link")
         self.only.setToolTip("Show only this area")
         self.only.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.only.clicked.connect(only)
+        self.only.clicked.connect(lambda _checked=False: only())
         badge = QLabel(str(count))
         badge.setObjectName("count")
         badge.setAlignment(Qt.AlignmentFlag.AlignCenter)

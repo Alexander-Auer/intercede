@@ -167,3 +167,131 @@ def test_the_model_is_the_same_each_time_the_code_is_read():
     ]
     assert read[0] == read[1]
     assert json.loads(read[0])["sources"]
+
+
+SOURCE = """import functools
+
+
+class Thing:
+    @functools.cache
+    async def long(
+        self,
+        a: int,
+    ) -> int:
+        def inner() -> int:
+            return a
+
+        return inner()
+
+    def after(self) -> None:
+        pass
+"""
+
+
+def test_a_function_is_found_whole_from_its_first_line():
+    text, first = d.function_source(
+        SOURCE, 5
+    )  # the decorator's line, as Python records it
+    assert first == 5
+    assert text.splitlines()[0].strip() == "@functools.cache"
+    assert (
+        text.splitlines()[-1].strip() == "return inner()"
+    )  # past the signature's lines
+    inner, _ = d.function_source(SOURCE, 10)
+    assert inner.splitlines() == ["        def inner() -> int:", "            return a"]
+
+
+def _node(number, parent, qualname, module="pkg.a", kind="call"):
+    return {
+        "id": number,
+        "parent": parent,
+        "kind": kind,
+        "qualname": qualname,
+        "module": module,
+        "step_in": number,
+    }
+
+
+def test_a_traced_path_numbers_the_classes_and_names_the_calls(model):
+    nodes = [
+        _node(0, None, "Impl.run"),
+        _node(1, 0, "helper"),  # a module function: its calls are Impl's
+        _node(2, 1, "Part.make", module="pkg.b"),
+        _node(3, 2, "Part.check", module="pkg.b"),  # within one class: no arrow
+        _node(4, 0, "Part.save", module="pkg.b"),
+        _node(5, 0, "sbatch", kind="command"),
+    ]
+    order, calls = d.trace_path(model, nodes)
+    assert order == {"c1": 1, "c2": 2}
+    assert calls == [{"kind": "calls", "from": "c1", "to": "c2", "label": "make, save"}]
+
+
+needs_monitoring = pytest.mark.skipif(
+    sys.version_info < (3, 12), reason="tracing needs sys.monitoring"
+)
+
+
+@needs_monitoring
+def test_a_call_is_followed_through_the_backend_and_back():
+    """The fake needs no resource, so it always runs; the stacks are traced the same way."""
+    pytest.importorskip("intercede")
+
+    def trace(*args: str) -> dict:
+        done = subprocess.run(  # noqa: S603  (constant input)
+            [sys.executable, str(DEMO / "desktop" / "trace.py"), *args],
+            capture_output=True,
+            check=True,
+            text=True,
+            cwd=DEMO.parent,
+        )
+        return json.loads(done.stdout)
+
+    listed = {b["name"]: b for b in trace("--list")["backends"]}
+    assert listed["fake"]["running"] is True
+    assert {"submit", "get_status"} <= set(listed["fake"]["operations"])
+    run = trace("fake", "submit")
+    nodes = {n["id"]: n for n in run["nodes"]}
+    roots = [n for n in nodes.values() if n["parent"] is None]
+    assert [n["name"] for n in roots] == [f"{run['class']}.submit"]
+    assert all("end" in n for n in nodes.values())  # every call returned
+    assert all(n["step_in"] < n["step_out"] for n in nodes.values())
+    assert run["result"].startswith("Submission(")
+
+
+@needs_monitoring
+def test_what_leaves_the_process_is_recorded_under_the_call_that_sent_it(
+    tmp_path, monkeypatch
+):
+    import asyncio
+    import importlib.util
+
+    from demo.desktop import trace
+
+    monkeypatch.setattr(
+        asyncio, "create_subprocess_exec", asyncio.create_subprocess_exec
+    )
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "work.py").write_text(
+        "import asyncio\n\n"
+        "async def run():\n"
+        "    process = await asyncio.create_subprocess_exec(\n"
+        "        'echo', 'hi', stdout=asyncio.subprocess.PIPE\n"
+        "    )\n"
+        "    out, _ = await process.communicate()\n"
+        "    return out\n"
+    )
+    spec = importlib.util.spec_from_file_location("pkg_work", package / "work.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    recorder = trace.Recorder(package)
+    trace.watch_processes(recorder)
+    with recorder:
+        asyncio.run(module.run())
+
+    run, command = recorder.nodes
+    assert (run["name"], run["returned"]) == ("run", "b'hi\\n'")
+    assert command["kind"] == "command" and command["name"] == "echo hi"
+    assert command["parent"] == run["id"] and command["call_line"] == 4
+    assert command["returned"] == "exit 0: hi"

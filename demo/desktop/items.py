@@ -115,6 +115,7 @@ class ClassItem(QGraphicsItem):
         self.chosen = False
         self.found = False
         self.hovered = False
+        self.order: int | None = None  # its place on a traced call's path
         self.size = self.measure(cls, members, fonts)
         self.header = self._header_height(cls["kind"], fonts)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -163,9 +164,14 @@ class ClassItem(QGraphicsItem):
         self.hovered = False
         self.update()
 
+    def set_order(self, order: int | None) -> None:
+        if order != self.order:
+            self.order = order
+            self.update()
+
     def boundingRect(self) -> QRectF:  # noqa: N802 (Qt's name)
         w, h = self.size
-        return QRectF(-4, -4, w + 8, h + 4 + _SHADOW + 2)
+        return QRectF(-14, -14, w + 18, h + 14 + _SHADOW + 2)
 
     def paint(
         self,
@@ -228,6 +234,8 @@ class ClassItem(QGraphicsItem):
         painter.drawText(
             QRectF(0, y, w, name.height()), Qt.AlignmentFlag.AlignCenter, self.name
         )
+        if self.order is not None:
+            self._badge(painter)
         if not self.members:
             return
 
@@ -248,6 +256,22 @@ class ClassItem(QGraphicsItem):
                 line.text,
             )
             y += member.height()
+
+    def _badge(self, painter: QPainter) -> None:
+        """Its place on a traced call's path: a numbered dot at the top left."""
+        c = self.colours
+        r = 11.0
+        centre = QPointF(0, 0)
+        painter.setPen(QPen(QColor(c["panel"]), 2))
+        painter.setBrush(QColor(c["focus"]))
+        painter.drawEllipse(centre, r, r)
+        font = QFont(self.fonts.name)
+        font.setPixelSize(11)
+        painter.setFont(font)
+        painter.setPen(QColor("#ffffff"))
+        painter.drawText(
+            QRectF(-r, -r, 2 * r, 2 * r), Qt.AlignmentFlag.AlignCenter, str(self.order)
+        )
 
 
 class EdgeItem(QGraphicsItem):

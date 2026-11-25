@@ -165,6 +165,25 @@ _ICONS = {
     "moon": '<path d="M19.5 14.5A7.5 7.5 0 1 1 9.5 4.5a6 6 0 0 0 10 10z"/>',
     "system": '<rect x="3.5" y="4.5" width="17" height="11.5" rx="2"/><path d="M8.5 20h7M12 16v4"/>',
     "check": '<path d="M5.5 12.5l4 4 9-9.5"/>',
+    "diagram": '<rect x="3.5" y="3.5" width="7" height="5" rx="1.2"/>'
+    '<rect x="13.5" y="15.5" width="7" height="5" rx="1.2"/>'
+    '<rect x="3.5" y="15.5" width="7" height="5" rx="1.2"/><path d="M7 8.5v7M10.5 6h6.5v9.5"/>',
+    "trace": '<circle cx="5.5" cy="5.5" r="2"/><circle cx="18.5" cy="18.5" r="2"/>'
+    '<path d="M7.5 5.5h7a3.5 3.5 0 0 1 0 7h-5a3.5 3.5 0 0 0 0 7h7"/>',
+    "call": '<path d="M7 4.5c-2 0-2.5 1.5-2.5 3.5v2c0 1.2-.8 2-2 2 1.2 0 2 .8 2 2v2c0 2 .5 3.5 2.5 3.5'
+    'M17 4.5c2 0 2.5 1.5 2.5 3.5v2c0 1.2.8 2 2 2-1.2 0-2 .8-2 2v2c0 2-.5 3.5-2.5 3.5"/>',
+    "async": '<path d="M13 3.5L6 13.5h6l-1 7 7-10h-6z"/>',
+    "command": '<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M12.5 15h4.5"/>',
+    "request": '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.6 3.5 5.4 3.5 8.5s-1 5.9-3.5 8.5'
+    'M12 3.5c-2.5 2.6-3.5 5.4-3.5 8.5s1 5.9 3.5 8.5"/>',
+    "raised": '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5.5M12 16.3v.2"/>',
+    "first": '<path d="M6 5.5v13M18 6l-8 6 8 6z"/>',
+    "back": '<path d="M15 6l-7 6 7 6"/>',
+    "step": '<path d="M9 6l7 6-7 6"/>',
+    "over": '<path d="M4 15.5a8 8 0 0 1 15-3.5M19.5 7v5h-5"/><circle cx="12" cy="18.5" r="1.3"/>',
+    "expand": '<path d="M7 9.5l5 5 5-5"/>',
+    "collapse": '<path d="M7 14.5l5-5 5 5"/>',
+    "play": '<path d="M8 5.5v13l10.5-6.5z"/>',
 }
 
 
@@ -242,6 +261,23 @@ def stylesheet(c: dict[str, str], check_svg: Path) -> str:
     QCheckBox::indicator:checked {{ background: {c["accent"]}; border-color: {c["accent"]};
                                     image: url("{check}"); }}
 
+    QPushButton#choice {{ text-align: left; padding: 8px 11px; }}
+    QPushButton#choice:checked {{ border: 1.5px solid {c["accent"]}; background: {selected};
+                                  font-weight: 700; }}
+    QPushButton#choice:disabled {{ color: {c["ink-3"]}; background: {c["panel-2"]}; }}
+    QPushButton#primary:hover {{ background: {mix(c["accent"], 0.85, "#000000").name()}; }}
+    QPushButton#primary:disabled {{ background: {c["line"]}; border-color: {c["line"]}; }}
+    QFrame#segmented {{ background: {c["panel-2"]}; border-radius: 9px; }}
+    QFrame#segmented QToolButton {{ padding: 5px 12px; border-radius: 7px; font-weight: 600;
+                                    color: {c["ink-2"]}; }}
+    QFrame#segmented QToolButton:checked {{ background: {c["panel"]}; color: {c["ink"]};
+                                            border: 1px solid {c["line"]}; }}
+    QTreeWidget {{ background: {c["panel"]}; border: none; outline: 0; }}
+    QTreeWidget::item {{ padding: 3px 2px; border-radius: 5px; }}
+    QTreeWidget::item:hover {{ background: {hover}; }}
+    QTreeWidget::item:selected {{ background: {selected}; color: {c["ink"]}; }}
+    QHeaderView::section {{ background: {c["panel"]}; color: {c["ink-3"]}; border: none;
+                            border-bottom: 1px solid {c["line-2"]}; padding: 6px 8px; }}
     QFrame#floating {{ background: {c["panel"]}; border: 1px solid {c["line"]};
                        border-radius: 10px; }}
     QLabel#pill {{ background: {c["panel"]}; border: 1px solid {c["line"]}; border-radius: 12px;
@@ -377,6 +413,7 @@ LINE_STYLE = {
     "implements": Qt.PenStyle.DashLine,
     "holds": Qt.PenStyle.SolidLine,
     "uses": Qt.PenStyle.DotLine,
+    "calls": Qt.PenStyle.SolidLine,  # a traced call, from caller to callee
 }
 
 

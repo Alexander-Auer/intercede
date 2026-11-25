@@ -63,7 +63,9 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
+    QStackedWidget,
     QTextBrowser,
     QToolButton,
     QVBoxLayout,
@@ -72,6 +74,7 @@ from PySide6.QtWidgets import (
 
 from . import diagram as d
 from .items import AreaItem, ClassItem, EdgeItem, Fonts, text_size
+from .journey import TracePage
 from .style import (
     THEMES,
     Switch,
@@ -85,7 +88,15 @@ from .style import (
     swatch,
 )
 from .widgets import AreaRow, Canvas, CodeView, PythonHighlighter, tool
-from .work import Layouter, Reader, branch, cache_dir, checkout_python, icon_svg
+from .work import (
+    Layouter,
+    Reader,
+    Tracer,
+    branch,
+    cache_dir,
+    checkout_python,
+    icon_svg,
+)
 
 __all__ = ["Window", "checkout_python", "icon_svg"]
 
@@ -127,7 +138,7 @@ def _link(text: str, tip: str, act: Callable[[], Any]) -> QToolButton:
     button.setToolTip(tip)
     button.setObjectName("link")
     button.setCursor(Qt.CursorShape.PointingHandCursor)
-    button.clicked.connect(act)
+    button.clicked.connect(lambda _checked=False: act())
     return button
 
 
@@ -206,6 +217,8 @@ class Window(QMainWindow):
             hidden=set(self.stored.value("hidden", [], type=list) or []),
         )
         self.theme_choice = str(self.stored.value("theme", "system"))
+        if self.theme_choice not in ("system", *THEMES):  # an older or broken setting
+            self.theme_choice = "system"
         self.colours = THEMES["light"]
         self.fonts = Fonts.default()
         self.model: dict[str, Any] | None = None
@@ -233,6 +246,13 @@ class Window(QMainWindow):
         self.canvas.clicked.connect(self.choose)
         self.canvas.unfocus_button.clicked.connect(self.unfocus)
 
+        # A traced call's path on the diagram: class -> its place, the calls between them.
+        self.path: dict[str, int] | None = None
+        self.path_calls: list[dict[str, Any]] = []
+        self.path_title = ""
+        self.mode_buttons: list[QToolButton] = []
+
+        self.tracer = Tracer(repo, python)
         self.reader = Reader(repo, python)
         self.reader.loaded.connect(self.loaded)
         self.reader.failed.connect(self.read_failed)
@@ -276,7 +296,13 @@ class Window(QMainWindow):
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setCollapsible(1, False)
         self.splitter.setSizes([310, 900, 420])
-        self.setCentralWidget(self.splitter)
+        self.trace_page = TracePage(self.repo, self.tracer, self._mode_switch())
+        self.trace_page.show_in_diagram.connect(self.show_path)
+        self.trace_page.open_file.connect(self.open_file)
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self.splitter)
+        self.pages.addWidget(self.trace_page)
+        self.setCentralWidget(self.pages)
 
         for keys, act in [
             (["+", "="], lambda: self.canvas.zoom(1.25)),
@@ -321,7 +347,9 @@ class Window(QMainWindow):
             Qt.AlignmentFlag.AlignTop,
         )
         column.addLayout(top)
-        column.addSpacing(12)
+        column.addSpacing(10)
+        column.addWidget(self._mode_switch())
+        column.addSpacing(10)
 
         self.search = QLineEdit()
         self.search.setPlaceholderText("Find a class…  (Ctrl+F)")
@@ -569,6 +597,8 @@ class Window(QMainWindow):
                 legend_arrow(kind, c) if what == "arrow" else swatch(c, kind)
             )
         self.canvas.set_colours(c)
+        self.trace_page.set_colours(c)
+        self.trace_page.run_button.setIcon(icon("play", "#ffffff"))
         self.canvas.setBackgroundBrush(QColor(c["bg"]))
         self.detail_text.document().setDefaultStyleSheet(
             f"""
@@ -627,6 +657,7 @@ class Window(QMainWindow):
         self.add_watches()  # a file saved by renaming, or a new one, is watched afresh
         self.canvas.show_status("The code changed: reading it again…")
         self.reader.read()
+        self.trace_page.again()
 
     def loaded(self, data: dict[str, Any]) -> None:
         data["read_at"] = time.strftime("%H:%M")
@@ -769,8 +800,14 @@ class Window(QMainWindow):
         if self.model is None:
             return
         model = self.model
-        classes = d.shown_classes(model, self.settings, self.focus)
-        relations = d.shown_relations(model, {c["id"] for c in classes}, self.settings)
+        only = set(self.path) if self.path is not None else None
+        classes = d.shown_classes(model, self.settings, self.focus, only)
+        if self.path is not None:  # the traced call's own arrows: who called whom
+            relations = list(self.path_calls)
+        else:
+            relations = d.shown_relations(
+                model, {c["id"] for c in classes}, self.settings
+            )
         self.text = d.mermaid_text(model, classes, relations, self.settings)
         self.shown = (classes, relations)
         self.then = list(then or [])
@@ -820,6 +857,7 @@ class Window(QMainWindow):
             node.set_colours(self.colours)
             node.setPos(box.x, box.y)
             self.scene.addItem(node)
+            node.set_order(self.path.get(c["id"]) if self.path is not None else None)
             self.items[c["id"]] = node
         self.canvas.set_bounds(QRectF(0, 0, layout.width, layout.height))
         self.mark()
@@ -852,10 +890,16 @@ class Window(QMainWindow):
             )
         chosen = self.chosen if self.chosen in self.items else None
         for edge in self.edges:
-            lit = chosen is not None and chosen in edge.ends
-            edge.set_state(
-                lit=lit, faded=bool(query) or (chosen is not None and not lit)
+            if chosen is not None:
+                lit = chosen in edge.ends
+            elif self.path is not None:  # the calls of the traced call
+                lit = edge.kind == "calls"
+            else:
+                lit = False
+            faded = bool(query) or (
+                (chosen is not None or self.path is not None) and not lit
             )
+            edge.set_state(lit=lit, faded=faded)
 
     # -- search -----------------------------------------------------------------------
 
@@ -913,7 +957,10 @@ class Window(QMainWindow):
             self.canvas.centre_on(item.sceneBoundingRect())
 
     def show_focus(self) -> None:
-        if self.focus and self.focus in self.by_id:
+        if self.path is not None:
+            title = html.escape(self.path_title)
+            self.canvas.show_focus(f"The path of <b>{title}</b>, in the order it went")
+        elif self.focus and self.focus in self.by_id:
             name = html.escape(self.by_id[self.focus]["name"])
             self.canvas.show_focus(f"Only <b>{name}</b> and its neighbours")
         else:
@@ -922,6 +969,7 @@ class Window(QMainWindow):
 
     def unfocus(self) -> None:
         self.focus = None
+        self.path = None
         self.show_focus()
         chosen = self.chosen
         self.render(fit=True, then=[lambda: self.choose(chosen)] if chosen else [])
@@ -1066,6 +1114,64 @@ class Window(QMainWindow):
             self.text,
         ).exec()
 
+    # -- the two pages ------------------------------------------------------------------
+
+    def _mode_switch(self) -> QFrame:
+        """Diagram or Trace: one switch on each page, kept alike."""
+        frame = QFrame()
+        frame.setObjectName("segmented")
+        row = QHBoxLayout(frame)
+        row.setContentsMargins(3, 3, 3, 3)
+        row.setSpacing(2)
+        for page, (name, text, tip) in enumerate(
+            [
+                ("diagram", "Diagram", "Every class, and how they relate"),
+                ("trace", "Trace a call", "Follow one call through the code, and back"),
+            ]
+        ):
+            button = QToolButton()
+            button.setText(text)
+            button.setToolTip(tip)
+            button.setProperty("icon_name", name)
+            button.setProperty("page", page)
+            button.setCheckable(True)
+            button.setChecked(page == 0)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(lambda _=False, page=page: self.show_page(page))
+            row.addWidget(button)
+            self.mode_buttons.append(button)
+        return frame
+
+    def show_page(self, page: int) -> None:
+        self.pages.setCurrentIndex(page)
+        for button in self.mode_buttons:
+            button.setChecked(button.property("page") == page)
+        if page == 1:
+            self.trace_page.start(self.model)
+
+    def show_path(
+        self, order: dict[str, int], calls: list[dict[str, Any]], title: str
+    ) -> None:
+        """Draw the classes a traced call went through, numbered, with its calls as arrows."""
+        self.path = order or None
+        self.path_calls = calls
+        self.path_title = title
+        self.focus = None
+        self.chosen = None
+        self.detail.hide()
+        self.show_focus()
+        self.show_page(0)
+        self.render(fit=True)
+
+    def open_file(self, path: str, line: int) -> None:
+        target = self.repo / path
+        if (code := shutil.which("code")) is not None:
+            QProcess.startDetached(code, ["-g", f"{target}:{line}"])
+        else:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
+
     # -- closing --------------------------------------------------------------------------
 
     def stop(self) -> None:
@@ -1073,6 +1179,7 @@ class Window(QMainWindow):
         self.debounce.stop()
         self.reader.stop()
         self.layouter.stop()
+        self.tracer.stop()
 
     def closeEvent(self, event: Any) -> None:  # noqa: N802 (Qt's name)
         self.stored.setValue("geometry", self.saveGeometry())

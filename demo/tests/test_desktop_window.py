@@ -85,3 +85,42 @@ def test_search_marks_what_it_finds(window):
     assert all(i.opacity() < 1 for i in window.items.values() if not i.found)
     window.search.clear()
     window.mark()
+
+
+def test_a_traced_call_is_shown_and_drawn_on_the_diagram(app, window):
+    window.show_page(1)
+    page = window.trace_page
+    _until(app, lambda: page.backends)
+    page.choose_backend("fake")
+    page.choose_operation("submit")
+    page.run()
+    _until(app, lambda: page.trace is not None)
+    assert page.tree.topLevelItem(0).text(0) == "FakeBackend.submit"
+    page.step_over()  # past the whole call, to its return
+    assert page.events[page.position] == (0, "out")
+    page.to_diagram()
+    _until(app, lambda: window.path and "arrows" in window.canvas.status.text())
+    assert window.pages.currentIndex() == 0
+    assert {window.by_id[c]["name"] for c in window.path} >= {"FakeBackend"}
+    window.unfocus()
+
+
+def test_the_buttons_do_what_they_say_when_clicked(app, window):
+    """Clicked for real: Qt passes ``checked`` to a slot, which must not end up as an argument."""
+    dark = next(b for b in window.themes.buttons() if b.property("theme") == "dark")
+    dark.click()
+    assert window.theme_choice == "dark"
+    assert window.stored.value("theme") == "dark"
+    system = next(b for b in window.themes.buttons() if b.property("theme") == "system")
+    system.click()
+
+    area, row = next(iter(window.area_rows.items()))
+    row.only.click()
+    _until(
+        app,
+        lambda: "arrows" in window.canvas.status.text()
+        or "Nothing" in window.canvas.status.text(),
+    )
+    assert window.settings.hidden == {a["name"] for a in window.model["areas"]} - {area}
+    window.set_all(True)
+    _until(app, lambda: len(window.items) == len(window.model["classes"]))
