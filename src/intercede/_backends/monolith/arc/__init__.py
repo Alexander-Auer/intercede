@@ -7,7 +7,7 @@ session directory afterwards. No ARC client tools are needed on this host.
 
 - ``backend``: the backend, joining the modules of its capabilities
 - ``jobs``: which handles are ours, and the states of their jobs (status)
-- ``submit``: submitting, a capability of its own
+- ``submit``, ``cancel`` (kill and purge): one capability each
 - ``connection``: the requests, each with the token of its operation
 - ``staging``: what each copy's description says, and what is uploaded
 
