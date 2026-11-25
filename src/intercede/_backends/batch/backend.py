@@ -5,61 +5,37 @@ again, which job is whose, and what a capability does with the scheduler's
 commands. It never asks which transport or scheduler it has, so N transports and
 M schedulers need N + M classes, not N x M. See ``layout`` for the files it keeps
 on the resource, which are all it keeps: it remembers no jobs.
+
+Each operation is in a module of its own (``submit``, ``output``, ``cancel``), and
+all of them share ``jobs``: which handles are this backend's, and the states of
+their jobs. This class builds them, and checks the backend is open before each
+operation.
 """
 
 from __future__ import annotations
 
-import asyncio
-import posixpath
-import re
-import shutil
-import tempfile
-import uuid
-from collections.abc import Callable, Iterable, Mapping, Sequence
-from contextlib import suppress
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import TracebackType
 from typing import Self
-from urllib.parse import quote
 
-from pydantic import ValidationError
-
-from intercede._backends.batch import collect, job, layout
-from intercede._backends.batch.protocols import (
-    Command,
-    CommandResult,
-    Scheduler,
-    SchedulerStatusMap,
-    Transport,
-)
+from intercede._backends.batch.cancel import JobCanceller
+from intercede._backends.batch.jobs import Jobs
+from intercede._backends.batch.output import OutputCollector
+from intercede._backends.batch.protocols import Scheduler, Transport
+from intercede._backends.batch.submit import JobSubmitter
 from intercede.config import BatchLocalConfig, BatchSSHConfig
-from intercede.exceptions import (
-    ConfigurationError,
-    InterCEdeError,
-    ResourceUnavailableError,
-    SpecificationRejectedError,
-)
+from intercede.exceptions import ConfigurationError, InterCEdeError
 from intercede.models import (
     CopyVars,
     JobHandle,
-    JobID,
     JobOutput,
-    JobStatus,
     OpOutcome,
     StatusMap,
     Submission,
     SubmissionSpec,
 )
 from intercede.protocols import JobBackend, Killable, OutputRetriever, Purgeable
-
-BACKEND = "batch"
-COMMAND_TIMEOUT_S = 120  # every command but copying files, which uses the limits
-CHUNK = 100  # job IDs per command line, so a poll of thousands of jobs stays bounded
-PARALLEL_TRANSFERS = 4
-
-_ACTIVE = frozenset({JobStatus.SUBMITTED, JobStatus.WAITING, JobStatus.RUNNING})
-_SUBMISSION = re.compile(r"[0-9a-f]{32}")
-_COPY = re.compile(r"[0-9]+")
 
 
 class BatchBackend:
@@ -77,9 +53,11 @@ class BatchBackend:
                 f"the scheduler {settings.scheduler!r} moves a job's files itself, "
                 "which the composed backend does not support yet"
             )
-        self._settings = settings
         self._transport = transport
-        self._scheduler = scheduler
+        self._jobs = Jobs(settings, transport, scheduler)
+        self._submitter = JobSubmitter(settings, self._jobs, transport, scheduler)
+        self._collector = OutputCollector(settings, self._jobs, transport)
+        self._canceller = JobCanceller(self._jobs, scheduler)
         self._closed = False
 
     @classmethod
@@ -124,326 +102,39 @@ class BatchBackend:
         self._closed = True
         await self._transport.__aexit__(exc_type, exc, tb)
 
-    # -- Submitter ---------------------------------------------------------
+    def _check_usable(self) -> None:
+        if self._closed:
+            raise InterCEdeError("backend is closed")
+
+    # -- the capabilities --------------------------------------------------
 
     async def submit(
         self, spec: SubmissionSpec, copies: int | Sequence[CopyVars] = 1
     ) -> Submission:
         self._check_usable()
-        copy_vars = [CopyVars()] * copies if isinstance(copies, int) else list(copies)
-        if not copy_vars:
-            return Submission(handles={})
-        launcher = self._settings.container_launcher
-        job.check(spec, copy_vars, launcher, self.resource)
-
-        submission = uuid.uuid4().hex
-        workdir = self._submission_dir(submission)
-        command = self._scheduler.submit_command(spec, len(copy_vars), workdir)
-        with tempfile.TemporaryDirectory(prefix="intercede-") as staging:
-            local = Path(staging) / submission
-            try:
-                await asyncio.to_thread(
-                    job.stage, spec, copy_vars, launcher, command.files, local
-                )
-            except ValueError as exc:  # a name no file can have
-                raise SpecificationRejectedError(str(exc)) from exc
-            except OSError as exc:
-                raise ResourceUnavailableError(
-                    f"preparing the job's files on this host failed: {exc}"
-                ) from exc
-            try:
-                await self._transport.put(
-                    local, workdir, timeout=self._settings.transfer_timeout_s
-                )
-            except ResourceUnavailableError:
-                await self._discard(workdir)  # part of it may have arrived
-                raise
-        # If this one times out it may have queued the jobs, which need their files.
-        result = await self._run(command.argv)
-        try:
-            ids = self._scheduler.parse_submit(result, len(copy_vars))
-        except ValueError as exc:
-            if result.returncode != 0:  # nothing was queued, so nothing needs the files
-                await self._discard(workdir)
-            raise ResourceUnavailableError(
-                f"submitting to {self.resource} failed: {exc}"
-            ) from exc
-        return Submission(
-            handles={
-                index: JobHandle(
-                    backend=BACKEND,
-                    resource=self.resource,
-                    id=job_id,
-                    routing={"submission": submission, "copy": str(index)},
-                )
-                for index, job_id in enumerate(ids)
-            }
-        )
-
-    # -- StatusReporter ----------------------------------------------------
+        return await self._submitter.submit(spec, copies)
 
     async def get_status(self, handles: Sequence[JobHandle]) -> StatusMap:
         self._check_usable()
-        states = await self._states(self._ids(handles))
-        return {
-            handle: states.get(handle.id, JobStatus.UNKNOWN)
-            if self._owns(handle)
-            else JobStatus.UNKNOWN
-            for handle in handles
-        }
-
-    # -- OutputRetriever ---------------------------------------------------
+        return await self._jobs.status(handles)
 
     async def get_output(
         self, handles: Sequence[JobHandle], dest: Path
     ) -> Mapping[JobHandle, OpOutcome[JobOutput]]:
         self._check_usable()
-        states = await self._states(self._ids(handles))
-        results: dict[JobHandle, OpOutcome[JobOutput]] = {}
-        ready: dict[JobHandle, None] = {}  # each once, in the caller's order
-        for handle in handles:
-            state = states.get(handle.id) if self._owns(handle) else None
-            if state is None:
-                results[handle] = _not_collected("unknown job")
-            elif state in _ACTIVE:
-                results[handle] = _not_collected("job has not finished")
-            else:
-                ready[handle] = None
-
-        limit = asyncio.Semaphore(PARALLEL_TRANSFERS)
-
-        async def fetch(handle: JobHandle) -> None:
-            async with limit:
-                results[handle] = await self._collect(handle, dest)
-
-        await asyncio.gather(*(fetch(handle) for handle in ready))
-        return {handle: results[handle] for handle in handles}  # in the caller's order
-
-    async def _collect(self, handle: JobHandle, dest: Path) -> OpOutcome[JobOutput]:
-        """Copy what a finished job's specification asks for into ``dest``."""
-        directory = self._copy_dir(handle)
-        target = dest / quote(self.resource, safe="") / handle.id
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            manifest = await self._read_manifest(handle)
-            listed = await self._run(collect.listing_command(directory))
-            if manifest is None or listed.returncode != 0:
-                return _not_collected("the job was purged; its output is gone")
-            selection = collect.select(
-                collect.parse_listing(listed.stdout),
-                manifest,
-                max_files=self._settings.max_output_files,
-                max_bytes=self._settings.max_output_bytes,
-            )
-            async with asyncio.timeout(self._settings.transfer_timeout_s):
-                return await self._copy(selection, directory, target)
-        except (ValueError, OSError, ResourceUnavailableError) as exc:
-            return _not_collected(str(exc))
-        except TimeoutError:
-            return _not_collected(
-                f"collecting took longer than {self._settings.transfer_timeout_s} s"
-            )
-
-    async def _read_manifest(self, handle: JobHandle) -> job.Manifest | None:
-        submission = self._submission_dir(handle.routing["submission"])
-        result = await self._run(["cat", posixpath.join(submission, job.MANIFEST)])
-        if result.returncode != 0:
-            return None
-        try:
-            return job.Manifest.model_validate_json(result.stdout)
-        except ValidationError:
-            raise ValueError("the job's manifest cannot be read") from None
-
-    async def _copy(
-        self, selection: collect.Selection, directory: str, target: Path
-    ) -> OpOutcome[JobOutput]:
-        """Copy into a new directory and put it in place only when all of it arrived."""
-        partial = Path(tempfile.mkdtemp(prefix=".partial-", dir=target.parent))
-        timeout = self._settings.transfer_timeout_s
-
-        async def fetch(name: str, local: Path) -> Path:
-            remote = posixpath.join(directory, name)
-            await self._transport.get(remote, local, timeout=timeout)
-            return target / local.relative_to(partial)
-
-        try:
-            streams: dict[str, Path] = {}
-            for field in ("stdout", "stderr", "log"):
-                if (name := getattr(selection, field)) is not None:
-                    streams[field] = await fetch(name, partial / field)
-            files = {}
-            for name in selection.files:
-                member = name.removeprefix(f"{layout.WORK}/")
-                files[member] = await fetch(name, partial / "files" / member)
-            shutil.rmtree(target, ignore_errors=True)  # a previous collection
-            partial.rename(target)
-        finally:
-            shutil.rmtree(partial, ignore_errors=True)
-        return OpOutcome[JobOutput](ok=True, value=JobOutput(files=files, **streams))
-
-    # -- Killable / Purgeable ----------------------------------------------
+        return await self._collector.get_output(handles, dest)
 
     async def kill(
         self, handles: Sequence[JobHandle]
     ) -> Mapping[JobHandle, OpOutcome[None]]:
         self._check_usable()
-        ids = self._ids(handles)
-        states = await self._states(ids)
-        # Only active jobs: a finished one has nothing left to cancel.
-        refused = await self._cancel([i for i in ids if states.get(i) in _ACTIVE])
-        results = {}
-        for handle in handles:
-            state = states.get(handle.id) if self._owns(handle) else None
-            if state is None:
-                results[handle] = OpOutcome[None](ok=False, reason="unknown job")
-            elif handle.id in refused:
-                results[handle] = OpOutcome[None](ok=False, reason=refused[handle.id])
-            elif state in _ACTIVE:
-                results[handle] = OpOutcome[None](ok=True)
-            else:
-                results[handle] = OpOutcome[None](ok=True, reason="already finished")
-        return results
+        return await self._canceller.kill(handles)
 
     async def purge(
         self, handles: Sequence[JobHandle]
     ) -> Mapping[JobHandle, OpOutcome[None]]:
         self._check_usable()
-        ids = self._ids(handles)
-        states = await self._states(ids)
-        refused = await self._cancel([i for i in ids if states.get(i) in _ACTIVE])
-        ours = [h for h in handles if self._owns(h) and h.id not in refused]
-        failed = await self._remove(ours)
-        results = {}
-        for handle in handles:
-            if not self._owns(handle):
-                results[handle] = OpOutcome[None](ok=False, reason="unknown job")
-            elif handle.id in refused or handle in failed:
-                reason = refused.get(handle.id) or failed[handle]
-                results[handle] = OpOutcome[None](ok=False, reason=reason)
-            else:
-                results[handle] = OpOutcome[None](ok=True)
-        return results
-
-    async def _cancel(self, ids: Sequence[JobID]) -> dict[JobID, str]:
-        """Cancel jobs; return the reason for each that was not cancelled."""
-        failures: dict[JobID, str] = {}
-        for chunk in _chunks(ids):
-            result = await self._run(self._scheduler.kill_command(chunk))
-            if result.returncode != 0:
-                failures.update(dict.fromkeys(chunk, _reason(result)))
-        if not failures:
-            return {}
-        # A tool does not say which ID failed, so see what really happened: a
-        # job may also have ended in the meantime.
-        states = await self._states(list(failures))
-        return {i: why for i, why in failures.items() if states.get(i) in _ACTIVE}
-
-    async def _remove(self, handles: Sequence[JobHandle]) -> dict[JobHandle, str]:
-        """Remove jobs' files; return the reason for each whose files could not be."""
-        failed: dict[JobHandle, str] = {}
-        unique = list(dict.fromkeys(handles))
-        for start in range(0, len(unique), CHUNK):
-            chunk = unique[start : start + CHUNK]
-            result = await self._run(["rm", "-rf", *map(self._copy_dir, chunk)])
-            if result.returncode != 0:
-                failed.update(dict.fromkeys(chunk, _reason(result)))
-        submissions = {h.routing["submission"] for h in unique if h not in failed}
-        for submission in submissions:
-            workdir = self._submission_dir(submission)
-            # Fails while other copies remain, which then still need the inputs.
-            emptied = await self._run(["rmdir", f"{workdir}/{layout.COPIES}"])
-            if emptied.returncode == 0:
-                await self._run(["rm", "-rf", workdir])
-        return failed
-
-    # -- talking to the resource -------------------------------------------
-
-    async def _states(self, ids: Sequence[JobID]) -> dict[JobID, JobStatus]:
-        """Ask the queue about jobs, and the history about those it does not know."""
-        scheduler = self._scheduler
-        states: dict[JobID, JobStatus] = {}
-        for chunk in _chunks(ids):
-            states.update(
-                await self._ask(scheduler.status_command, scheduler.parse_status, chunk)
-            )
-        for chunk in _chunks([i for i in ids if i not in states]):
-            states.update(
-                await self._ask(
-                    scheduler.history_command, scheduler.parse_history, chunk
-                )
-            )
-        return {i: state for i, state in states.items() if state != JobStatus.UNKNOWN}
-
-    async def _ask(
-        self,
-        command: Callable[[Sequence[JobID]], Command],
-        parse: Callable[[CommandResult, Sequence[JobID]], SchedulerStatusMap],
-        ids: Sequence[JobID],
-    ) -> SchedulerStatusMap:
-        result = await self._run(command(ids))
-        try:
-            return parse(result, ids)
-        except ValueError as exc:
-            raise ResourceUnavailableError(
-                f"asking {self.resource} about jobs failed: {exc}"
-            ) from exc
-
-    async def _run(self, argv: Command) -> CommandResult:
-        return await self._transport.run(argv, timeout=COMMAND_TIMEOUT_S)
-
-    async def _discard(self, workdir: str) -> None:
-        """Remove what was staged for a submission that did not happen, if that can be done."""
-        with suppress(InterCEdeError):
-            await self._run(["rm", "-rf", workdir])
-
-    # -- helpers -----------------------------------------------------------
-
-    def _check_usable(self) -> None:
-        if self._closed:
-            raise InterCEdeError("backend is closed")
-
-    def _owns(self, handle: JobHandle) -> bool:
-        """Tell whether a stored handle is one of this backend's, and well-formed.
-
-        Handles come from the consumer's storage and their values end up on
-        command lines and in paths on the resource, so they are checked.
-        """
-        return (
-            handle.backend == BACKEND
-            and handle.resource == self.resource
-            and self._scheduler.is_job_id(handle.id)
-            and _SUBMISSION.fullmatch(handle.routing.get("submission", "")) is not None
-            and _COPY.fullmatch(handle.routing.get("copy", "")) is not None
-        )
-
-    def _ids(self, handles: Iterable[JobHandle]) -> list[JobID]:
-        """Return the IDs to ask the scheduler about: ours, each once."""
-        return list(
-            dict.fromkeys(handle.id for handle in handles if self._owns(handle))
-        )
-
-    def _submission_dir(self, submission: str) -> str:
-        return posixpath.join(self._settings.workdir, submission)
-
-    def _copy_dir(self, handle: JobHandle) -> str:
-        """Return a job's directory, built from checked values: see ``_owns``."""
-        return posixpath.join(
-            self._submission_dir(handle.routing["submission"]),
-            layout.copy_dir(handle.routing["copy"]),
-        )
-
-
-def _chunks(ids: Sequence[JobID]) -> list[Sequence[JobID]]:
-    return [ids[start : start + CHUNK] for start in range(0, len(ids), CHUNK)]
-
-
-def _reason(result: CommandResult) -> str:
-    lines = [line.strip() for line in result.stderr.splitlines() if line.strip()]
-    return lines[-1] if lines else f"exit code {result.returncode}"
-
-
-def _not_collected(reason: str) -> OpOutcome[JobOutput]:
-    return OpOutcome[JobOutput](ok=False, reason=reason)
+        return await self._canceller.purge(handles)
 
 
 # The type checker proves conformance.
