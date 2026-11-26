@@ -15,6 +15,17 @@ from intercede.models import JobID
 # Ids per command line, so a status poll of thousands of jobs stays bounded.
 CHUNK = 100
 
+_JOB_ID = re.compile(r"\d+\.\d+")
+
+
+def is_job_id(value: str) -> bool:
+    """Tell whether a stored ID is a job's: ``<cluster>.<proc>``.
+
+    IDs come from stored handles and end up on command lines, so they are
+    checked first: a malformed one could otherwise pass as an option.
+    """
+    return _JOB_ID.fullmatch(value) is not None
+
 
 def schedd_options(pool: str, name: str) -> list[str]:
     """Reach the schedd ``name`` through the collector ``pool`` (host:port)."""

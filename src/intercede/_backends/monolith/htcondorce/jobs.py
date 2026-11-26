@@ -7,13 +7,12 @@ scoped to its operation.
 
 from __future__ import annotations
 
-import re
 from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from intercede._backends._htcondor import status
+from intercede._backends._htcondor import commands, status
 from intercede._backends.common import owned_ids, statuses
 from intercede._backends.credentials import (
     READ_SCOPES,
@@ -32,8 +31,6 @@ from intercede.models import JobHandle, JobID, StatusMap
 
 BACKEND = "htcondor-ce"
 DEFAULT_PORT = 9619
-
-_JOB_ID = re.compile(r"^\d+\.\d+$")
 
 
 class Jobs:
@@ -61,7 +58,7 @@ class Jobs:
         return (
             handle.backend == BACKEND
             and handle.resource == self.resource
-            and bool(_JOB_ID.match(handle.id))
+            and commands.is_job_id(handle.id)
         )
 
     def ids(self, handles: Iterable[JobHandle]) -> list[JobID]:
