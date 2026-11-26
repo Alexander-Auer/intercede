@@ -171,7 +171,7 @@ def stage(
     _write(directory / MANIFEST, manifest(spec, copies).model_dump_json())
     for name, content in files.items():
         _write(directory / name, content)
-    if Path(spec.executable).is_file():
+    if layout.ships_executable(spec):
         target = directory / layout.EXECUTABLE
         try:
             shutil.copyfile(spec.executable, target)
@@ -210,7 +210,7 @@ def _command(spec: SubmissionSpec, launcher: Sequence[str] | None) -> str:
         return " ".join(shlex.quote(part) for part in container_command(spec, launcher))
     executable = (
         f"{_UP}/{layout.EXECUTABLE}"
-        if Path(spec.executable).is_file()
+        if layout.ships_executable(spec)
         else shlex.quote(spec.executable)
     )
     arguments = [shlex.quote(argument) for argument in spec.arguments]

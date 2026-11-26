@@ -25,7 +25,7 @@ from intercede._backends.batch.output import OutputCollector
 from intercede._backends.batch.protocols import Scheduler, Transport
 from intercede._backends.batch.submit import JobSubmitter
 from intercede.config import BatchLocalConfig, BatchSSHConfig
-from intercede.exceptions import ConfigurationError, InterCEdeError
+from intercede.exceptions import InterCEdeError
 from intercede.models import (
     CopyVars,
     JobHandle,
@@ -48,11 +48,6 @@ class BatchBackend:
         scheduler: Scheduler,
     ) -> None:
         # Construction is cheap and does no I/O.
-        if scheduler.stages_own_files:
-            raise ConfigurationError(
-                f"the scheduler {settings.scheduler!r} moves a job's files itself, "
-                "which the composed backend does not support yet"
-            )
         self._transport = transport
         self._jobs = Jobs(settings, transport, scheduler)
         self._submitter = JobSubmitter(settings, self._jobs, transport, scheduler)

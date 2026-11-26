@@ -146,8 +146,13 @@ class Scheduler(Protocol):
     failed or printed something unreadable, which fails the whole operation.
 
     Attributes:
-        stages_own_files: Whether the scheduler moves the job's files itself.
-            When False, the backend copies them with the transport first.
+        stages_own_files: Whether a job's files reach the node that runs it
+            through the scheduler. Either way the backend first stages the
+            submission on the host the transport reaches, and collects from
+            there. When True, the scheduler's job moves what it needs to that
+            node and its copy's directory back (``layout.shared``); when False,
+            the job runs where the files are, so the nodes must share that
+            host's file system.
 
     """
 
