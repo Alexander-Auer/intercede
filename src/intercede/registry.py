@@ -54,6 +54,7 @@ _TRANSPORTS: dict[str, str] = {
 }
 _SCHEDULERS: dict[str, str] = {
     "slurm": "intercede._backends.batch.scheduler.slurm:Slurm",
+    "htcondor": "intercede._backends.batch.scheduler.htcondor:HTCondor",
 }
 
 _GROUPS: dict[str, dict[str, str]] = {

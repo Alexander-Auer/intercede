@@ -139,10 +139,8 @@ class TestRefused:
             registry.get_backend(config, CREDENTIALS)
 
     def test_composed_part_not_shipped_yet(self):
-        config = {**SSH_SLURM, "scheduler": "htcondor"}
-        with pytest.raises(
-            RegistryError, match="scheduler 'htcondor' is not available"
-        ):
+        config = {**SSH_SLURM, "scheduler": "direct"}
+        with pytest.raises(RegistryError, match="scheduler 'direct' is not available"):
             registry.get_backend(config, CREDENTIALS)
 
     def test_an_entry_that_cannot_be_imported(
@@ -181,7 +179,7 @@ class TestAvailable:
         assert registry.available() == {
             "backend": ("batch", "htcondor-ce"),
             "transport": ("local", "ssh"),
-            "scheduler": ("slurm",),
+            "scheduler": ("htcondor", "slurm"),
         }
 
     def test_lists_only_what_a_configuration_can_ask_for(
