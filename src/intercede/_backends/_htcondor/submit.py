@@ -217,3 +217,75 @@ def _render_queue(plan: SubmitPlan) -> list[str]:
         "leave_in_queue = (JobStatus == 4)",
         f"queue {len(plan.copies)}",
     ]
+
+
+# -- processes that move their own files ----------------------------------------------------
+
+# A process's number in its cluster, from 0, where a ``TransferPlan`` value names it.
+PROC_ID = "$(ProcId)"
+
+
+@dataclass(frozen=True)
+class TransferPlan:
+    """``count`` processes of one command, each moving only its own files.
+
+    Each process runs in a scratch directory of the node that runs it. HTCondor
+    copies its ``inputs`` there from ``initialdir`` on the submitting host, and
+    its ``outputs`` back to ``initialdir`` when it ends, at the same relative
+    paths. So the node needs no file system it shares with the submitting host,
+    and a process gets no file of another's. ``PROC_ID`` in an argument or a
+    path is the process's own number.
+    """
+
+    executable: str  # on the node that runs it: not transferred
+    arguments: Sequence[str]
+    initialdir: str  # on the submitting host
+    inputs: Sequence[str]  # relative to ``initialdir``; a directory with all it holds
+    # relative to the scratch directory, and copied back to ``initialdir``
+    outputs: Sequence[str]
+    log: str  # the command's own output and errors, relative to ``initialdir``
+    count: int
+    cpus: int = 1
+    memory_mb: int | None = None
+    wall_time_s: int | None = None
+
+
+def render_transfer(plan: TransferPlan) -> str:
+    """Write ``plan`` as a submit description that queues ``plan.count`` processes.
+
+    Raises:
+        ValueError: There is no process to queue, or a value cannot be written.
+    """
+    if plan.count < 1:
+        raise ValueError("A submit description needs at least one process")
+    _refuse_newlines(plan.initialdir)
+    arguments = " ".join(_proc(_quote_item(argument)) for argument in plan.arguments)
+    lines = [
+        "universe = vanilla",
+        f"executable = {_escape_macros(plan.executable)}",
+        "transfer_executable = false",
+        f'arguments = "{arguments}"',
+        f"initialdir = {_escape_macros(plan.initialdir)}",
+        "should_transfer_files = YES",
+        # Also when the job is evicted or removed: what it wrote so far comes back.
+        "when_to_transfer_output = ON_EXIT_OR_EVICT",
+        # A path in the lists below arrives at that path, not flattened to its name.
+        "preserve_relative_paths = true",
+        f"transfer_input_files = {_proc(_join(plan.inputs))}",
+        f"transfer_output_files = {_proc(_join(plan.outputs))}",
+        f"output = {_proc(_escape_macros(plan.log))}",
+        f"error = {_proc(_escape_macros(plan.log))}",
+        f"request_cpus = {plan.cpus}",
+    ]
+    if plan.memory_mb is not None:
+        lines.append(f"request_memory = {plan.memory_mb}")
+    if plan.wall_time_s is not None:
+        # The schedd's own limit: a job that runs longer is held, and reads as ABORTED.
+        lines.append(f"allowed_execute_duration = {plan.wall_time_s}")
+    lines.append(f"queue {plan.count}")
+    return "\n".join(lines) + "\n"
+
+
+def _proc(escaped: str) -> str:
+    """Let ``PROC_ID`` through a value whose macros were escaped: it is meant as one."""
+    return escaped.replace(_escape_macros(PROC_ID), PROC_ID)

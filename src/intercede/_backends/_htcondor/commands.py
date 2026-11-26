@@ -33,21 +33,31 @@ def schedd_options(pool: str, name: str) -> list[str]:
 
 
 def submit(
-    description: str, pool: str | None = None, name: str | None = None
+    description: str,
+    pool: str | None = None,
+    name: str | None = None,
+    *,
+    spool: bool = True,
 ) -> list[str]:
-    """Submit a description file and spool its inputs to the schedd.
+    """Submit a description file.
 
-    Spooling copies the inputs at submit time, so nothing on the submitting
-    host is needed afterwards. With ``pool`` and ``name`` the schedd is a
-    remote one (``-remote`` implies spooling); without, it is the local one.
+    With ``pool`` and ``name`` the schedd is a remote one, and ``-remote``
+    spools: the inputs are copied to the schedd at submit time, so nothing on
+    the submitting host is needed afterwards. Without, it is the schedd of the
+    host the tool runs on. That one spools too, unless ``spool`` is False: then
+    the schedd reads the inputs where they are when a job starts, and writes
+    its output back there when the job ends.
     """
     if (pool is None) != (name is None):
         raise ValueError("a remote schedd needs both pool and name")
+    if pool is not None and not spool:
+        raise ValueError("a remote schedd always spools")
 
     command = ["condor_submit", "-terse"]
 
     if pool is None or name is None:
-        command.append("-spool")
+        if spool:
+            command.append("-spool")
     else:
         command.extend(["-pool", pool, "-remote", name])
 
