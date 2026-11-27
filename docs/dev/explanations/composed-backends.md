@@ -35,5 +35,18 @@ The ADR asks whether moving a job's files should be a third collaborator next to
 same for every scheduler, so a `Stager` would have one implementation and would never vary. It would
 be an axis in name only. The backend does the staging itself.
 
-`Scheduler.stages_own_files` stays in the protocol for a scheduler that moves files itself. None does
-yet, so the backend refuses such a scheduler instead of half supporting it.
+## How a job's files reach the node that runs it
+
+The backend stages a submission on the host the transport reaches, and collects from there. Between
+that host and the node that runs a job, a scheduler takes one of two ways, which
+`Scheduler.stages_own_files` says:
+
+- **The job runs where its files are** (`False`, Slurm). The nodes must share that host's file
+  system, as a Slurm cluster's do.
+- **The job moves its files itself** (`True`, HTCondor). HTCondor copies what every copy shares
+  (`layout.shared`) and the job's own copy's directory to the node, and brings that directory back
+  when the job ends, at the same paths. The nodes need no shared file system, and a job never gets
+  another copy's directory, so not its secrets.
+
+Either way the backend does the same, so it never asks which way it is: what a job leaves is in its
+copy's directory on that host when the job has ended.

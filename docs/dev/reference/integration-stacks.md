@@ -22,9 +22,11 @@ tests/integration/
 └── stacks/
     ├── _template/          # copy this to start a new stack
     ├── _images/            # Dockerfiles (see integration-images.md)
-    ├── htcondor/           # a stack with its own compose environment
+    ├── htcondor/           # a stack, and the compose environment it shares with local-htcondor
     │   ├── compose.yml
     │   └── config/basic/   # backend config files + intercede-client.toml
+    ├── local-htcondor/
+    │   └── config/basic/   # intercede-client.toml only (runs inside the container)
     ├── slurm/              # a compose environment shared by two stacks
     │   ├── compose.yml
     │   └── config/basic/   # backend config files only (slurm.conf, cgroup.conf)
@@ -63,6 +65,10 @@ Otherwise it prints a notice and skips the stack.
 connects to it. Both set `compose: slurm`, so both start `stacks/slurm/compose.yml`. Each stack has
 its own `intercede-client.toml`.
 
+`htcondor` and `local-htcondor` share `stacks/htcondor/compose.yml` the same way, but test two
+backends: `htcondor` submits to the HTCondor-CE from the host, and `local-htcondor` runs the composed
+backend in the container, on the pool's own schedd behind that CE.
+
 `local-slurm` uses the markers `scheduler and slurm and not ssh`. Without `and not ssh`, the SSH
 tests would run in both jobs. Add the same `and not ssh` to every new `local-*` stack.
 
@@ -71,11 +77,12 @@ tests would run in both jobs. Add the same `and not ssh` to every new `local-*` 
 pytest runs inside the backend container, and interCEde talks to the scheduler directly, without
 SSH. For this to work:
 
-- the image contains Python and what the suite needs (`/opt/suite` in the Slurm image);
+- the image contains Python and what the suite needs (`/opt/suite` in the Slurm and HTCondor-CE
+  images);
 - `compose.yml` mounts the repository read-only and starts there (`working_dir`), so the tests are
   the ones you have checked out;
 - pytest runs as a normal user, not root, because HTCondor and Slurm refuse to run jobs as root
-  (`dirac` in the Slurm image).
+  (`dirac` in both images).
 
 ## Rules for a stack
 

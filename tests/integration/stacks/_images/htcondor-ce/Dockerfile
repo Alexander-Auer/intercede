@@ -42,6 +42,18 @@ RUN set -eux; \
 # submituser@users.htcondor.org (the CE's trust domain) maps to it.
 RUN useradd --create-home submituser
 
+# The `local-htcondor` stack runs the suite in this container, as `dirac`, and submits to the
+# pool's schedd directly, as a site's submit host would: Python and what the suite needs, as
+# pyproject.toml lists them. The suite itself is the repository, which compose.yml mounts.
+RUN set -eux; \
+    dnf install -y python3.12; \
+    dnf clean all; \
+    rm -rf /var/cache/dnf; \
+    python3.12 -m venv /opt/suite; \
+    /opt/suite/bin/pip install --no-cache-dir \
+        asyncssh pydantic pytest pytest-asyncio pytest-xdist pyyaml; \
+    useradd --create-home dirac
+
 COPY pool.conf /etc/condor/config.d/90-intercede-pool.conf
 COPY ce-router.conf /etc/condor-ce/config.d/90-intercede-router.conf
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh

@@ -17,6 +17,11 @@ each method.
    directory, and write the scheduler's log to `layout.scheduler_log(<copy>)`. Environment, inputs and
    secrets are already taken care of. Return the files you need (a job description, say) from
    `submit_command`, and the backend stages them.
+
+   If the batch system moves a job's files to the node that runs it, as HTCondor does, set
+   `stages_own_files = True`. Move what `layout.shared(spec)` names and the job's own
+   `layout.copy_dir(<copy>)` there, at the same paths, and bring that copy's directory back when
+   the job ends. See [Composed backends](../explanations/composed-backends.md).
 4. **Register it** in `_SCHEDULERS` in `src/intercede/registry.py`, under the name
    `_BatchConfig.scheduler` lists for it in `src/intercede/config.py`.
 5. **Add its stacks.** One `compose` environment, and an entry in `stacks.yml` per transport. See
