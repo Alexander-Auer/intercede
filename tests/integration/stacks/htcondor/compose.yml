@@ -1,4 +1,6 @@
-# The `htcondor` stack: an HTCondor-CE in front of a one-machine HTCondor pool.
+# The `htcondor` compose environment: an HTCondor-CE in front of a one-machine HTCondor pool.
+# The `htcondor` stack reaches the CE from the host; `local-htcondor` runs the suite in this
+# container and submits to the pool's schedd directly (stacks.yml `compose`).
 # Rules: docs/dev/reference/integration-stacks.md
 # The harness drives the service named `backend`: the CE, on 127.0.0.1:9619.
 services:
@@ -11,6 +13,12 @@ services:
       args:
         BACKEND_VERSION: ${BACKEND_VERSION:-latest}
     hostname: backend
+    # Where `docker compose exec` starts: `local-htcondor` runs the suite from the repository.
+    working_dir: /intercede
+    environment:
+      # The repository is read-only here, so pytest leaves nothing in it.
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTEST_ADDOPTS: -p no:cacheprovider
     networks:
       - stack
     ports:
@@ -20,6 +28,7 @@ services:
     volumes:
       # bind mount, not a named volume: the host-run harness must read the token
       - ./credentials:/shared/credentials
+      - ../../../..:/intercede:ro
       # backend half of the configuration, next to its intercede-client.toml
       - ./config/basic/ce.conf:/etc/condor-ce/config.d/99-basic.conf:ro
     healthcheck:

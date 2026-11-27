@@ -15,6 +15,13 @@ stacks:
     configs: [basic]
     markers: "scheduler and slurm"
 
+  - id: local-htcondor
+    compose: htcondor
+    configs: [basic]
+    versions: [lts, latest]
+    markers: "scheduler and htcondor and not ssh"
+    exec_in_container: true
+
   - id: local-slurm
     compose: slurm
     configs: [basic]
